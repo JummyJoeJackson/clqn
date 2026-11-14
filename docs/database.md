@@ -6,7 +6,7 @@ Use local PostgreSQL for development or managed PostgreSQL on GCP. Set `DATABASE
 npm run db:migrate
 ```
 
-The committed Drizzle migration creates users, clans, and memberships. The schema uses provider-assigned user UUIDs, unique membership pairs, and explicit membership roles. Migrations use a single connection suitable for the migration endpoint supplied by your database provider.
+The committed Drizzle migrations create users, credentials, clans, and memberships. The schema uses server-assigned user UUIDs, unique credential hashes and membership pairs, and explicit membership roles. Migrations use a single connection suitable for the migration endpoint supplied by your database provider.
 
 ## Schema changes
 
@@ -20,4 +20,6 @@ Review the generated SQL in `packages/api/drizzle` before applying it with `npm 
 
 ## Current scope
 
-No database is needed to run health checks or smoke tests. No authenticated collaboration routes are exposed yet. Implement server-side identity verification and clan authorization before using these tables through API operations. Direct SQL access is privileged and remains server-side.
+No database is needed for health checks or the default smoke tests. Authenticated routes require PostgreSQL and verify personal credentials and clan membership on the server. See [authentication and clans](authentication.md) for provisioning and API routes. Direct SQL access is privileged and remains server-side.
+
+Set `TEST_DATABASE_URL` to a dedicated test PostgreSQL database to run integration checks with `npm test`. The suite applies migrations, exercises concurrent clan creation, isolation, credential revocation, and a real CLI-to-API flow, then deletes its own test records. CI provides PostgreSQL and runs this suite on Node 22 and 24. Never point integration tests at a production database.

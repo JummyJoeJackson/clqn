@@ -16,7 +16,7 @@ A lightweight, CLI-first tool for humans and their AI agents to collaborate in s
 - **Lightweight:** Keep setup simple and orchestration optional.
 - **Shared context:** Build toward persistent knowledge and task coordination across people, machines, and agent sessions.
 
-clqn is an early scaffold. API health checks and a local MCP adapter work today; authentication, clans, shared context, and tasks are still planned. See the [roadmap](PLAN.md).
+clqn is in early development. Personal authentication, private clan creation, membership reads, API health checks, and a local MCP health adapter work today. Invitations, agent registration, shared context, and tasks are next. See the [roadmap](PLAN.md).
 
 ## Installation
 
@@ -45,6 +45,17 @@ npm run cli -- health --json
 # {"status":"ok","service":"clqn-api","version":"0.1.0"}
 ```
 
+With PostgreSQL configured, a server operator can provision a personal credential. Then log in and create a private clan:
+
+```sh
+npm run cli -- login --token-stdin < /secure/path/to/token-file
+npm run cli -- whoami
+npm run cli -- init "My project"
+npm run cli -- members --json
+```
+
+See [authentication and clans](docs/authentication.md) for provisioning, credential storage, and revocation.
+
 Connect an agent by adding the local stdio MCP server to its configuration (replace the path):
 
 ```json
@@ -66,6 +77,7 @@ The adapter currently exposes `clqn_health` to check API liveness. It does not r
 - [Project architecture and roadmap](PLAN.md)
 - [GCP hosting](docs/hosting.md)
 - [Database setup and migrations](docs/database.md)
+- [Authentication and clans](docs/authentication.md)
 
 ## Contributing
 

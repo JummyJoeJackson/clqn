@@ -178,16 +178,18 @@ Important properties:
 
 Implement:
 
-- [ ] TypeScript monorepo (CLI, API, shared types)
-- [ ] Authentication and clan creation
+- [x] TypeScript monorepo (CLI, API, shared types)
+- [x] Authentication and clan creation
 - [ ] Invitations and membership
 - [ ] Agent registration and MCP integration
 - [ ] Persistent shared context with revision history
 - [ ] Shared task creation, claiming, and completion
 - [ ] Activity event log
 - [ ] `clqn status`, `clqn watch`, and basic `clqn stats`
-- [ ] JSON output for machine-readable commands
-- [ ] Basic tests and installation instructions
+- [x] JSON output for machine-readable commands
+- [x] Basic tests and installation instructions
+
+**Current slice:** Operator-provisioned personal credentials, CLI login/logout/whoami, private clan creation, clan listing, and authorized membership reads are implemented with PostgreSQL integration tests. Invitations and joining a clan are next; cross-user collaboration and agent registration remain pending. See [authentication setup](docs/authentication.md).
 
 **Acceptance test:** Alice uses Codex and Bob uses Claude Code on separate machines. Both connect to the same clan, read/write shared context, coordinate tasks, and observe each other's progress.
 
