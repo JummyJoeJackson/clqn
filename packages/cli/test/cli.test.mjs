@@ -55,6 +55,7 @@ async function workspaceFixture(t) {
   const user = { id: 'e6bc7a0a-7291-435a-a7fc-a9d544233270', email: 'alice@example.com' };
   const clan = { id: '75e888b7-d3f1-4cbc-a5ba-2b9b9c7bfc69', name: 'My project', createdBy: user.id, createdAt: '2026-11-14T12:00:00.000Z' };
   const members = { members: [{ userId: user.id, email: user.email, role: 'leader', createdAt: clan.createdAt }] };
+  const invitation = { code: `clqn_inv_${'a'.repeat(43)}`, clanId: clan.id, email: 'bob@example.com', expiresAt: '2026-11-21T12:00:00.000Z' };
   const requests = [];
   const token = 'clqn_example_secret';
   const server = createServer(async (request, response) => {
@@ -72,6 +73,17 @@ async function workspaceFixture(t) {
       assert.deepEqual(JSON.parse(body), { name: clan.name });
       response.writeHead(201);
       response.end(JSON.stringify(clan));
+    } else if (request.url === `/v1/clans/${clan.id}/invitations` && request.method === 'POST') {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      assert.deepEqual(JSON.parse(body), { email: invitation.email });
+      response.writeHead(201);
+      response.end(JSON.stringify(invitation));
+    } else if (request.url === '/v1/invitations/join' && request.method === 'POST') {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      assert.deepEqual(JSON.parse(body), { code: invitation.code });
+      response.end(JSON.stringify(clan));
     } else if (request.url === '/v1/clans') response.end(JSON.stringify({ clans: [clan] }));
     else if (request.url === `/v1/clans/${clan.id}/members`) response.end(JSON.stringify(members));
     else { response.writeHead(404); response.end('{}'); }
@@ -88,8 +100,28 @@ async function workspaceFixture(t) {
     result.child.stdin.end(options.input);
     return result;
   };
-  return { call, directory, user, clan, members, token, requests, url };
+  return { call, directory, user, clan, members, invitation, token, requests, url };
 }
+
+test('CLI invitations normalize email, support an explicit clan, and joining selects the clan', async (t) => {
+  const f = await workspaceFixture(t);
+  await f.call(['login', '--token-stdin'], { input: f.token });
+  assert.deepEqual(JSON.parse((await f.call(['invite', ' Bob@Example.com ', '--clan', f.clan.id, '--json'])).stdout), f.invitation);
+  assert.deepEqual(JSON.parse((await f.call(['join', f.invitation.code, '--json'])).stdout), f.clan);
+  assert.deepEqual(JSON.parse((await f.call(['members', '--json'])).stdout), f.members);
+  assert.deepEqual(JSON.parse((await f.call(['invite', f.invitation.email, '--json'])).stdout), f.invitation);
+});
+
+test('CLI rejects malformed invitation input before making an HTTP request', async (t) => {
+  const f = await workspaceFixture(t);
+  for (const args of [['invite', 'bob@example.com'], ['invite', 'invalid-email', '--clan', f.clan.id], ['join', 'invalid-code']]) {
+    await assert.rejects(f.call([...args, '--json']), (error) => {
+      assert.equal(JSON.parse(error.stderr).error.code, 'COMMAND_FAILED');
+      return true;
+    });
+  }
+  assert.equal(f.requests.length, 0);
+});
 
 test('CLI login, clan creation, membership, and logout persist API-scoped private configuration', async (t) => {
   const { readdir, readFile, stat } = await import('node:fs/promises');

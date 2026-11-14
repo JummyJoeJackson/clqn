@@ -70,3 +70,30 @@ test('inaccessible, nonexistent, and invalid clan IDs reveal the same response',
     assert.deepEqual(await response.json(), { error: { code: 'NOT_FOUND', message: 'Clan not found' } });
   }
 });
+
+test('invitation routes validate bodies, forward verified identity, and hide inaccessible resources', async () => {
+  const code = `clqn_inv_${'b'.repeat(43)}`;
+  const app = createApp({
+    authenticate: async () => alice,
+    createInvitation: async (userId, clanId, email) => {
+      assert.equal(userId, alice.id);
+      assert.equal(clanId, alice.id);
+      assert.equal(email, 'bob@example.com');
+      return undefined;
+    },
+    joinInvitation: async (user, received) => {
+      assert.deepEqual(user, alice);
+      assert.equal(received, code);
+      return undefined;
+    },
+  });
+  const post = (path, body) => app.request(path, { method: 'POST', headers, body: JSON.stringify(body) });
+  assert.equal((await post(`/v1/clans/${alice.id}/invitations`, { email: ' Bob@Example.com ' })).status, 404);
+  assert.equal((await post('/v1/clans/bad/invitations', { email: 'bob@example.com' })).status, 404);
+  for (const body of [{}, { email: 'bad' }, { email: 'bob@example.com', createdBy: alice.id }]) {
+    assert.equal((await post(`/v1/clans/${alice.id}/invitations`, body)).status, 400);
+  }
+  assert.equal((await post('/v1/invitations/join', { code })).status, 404);
+  assert.equal((await post('/v1/invitations/join', { code: 'bad' })).status, 400);
+  assert.equal((await app.request('/v1/invitations/join', { method: 'POST', headers, body: 'x'.repeat(5000) })).status, 413);
+});

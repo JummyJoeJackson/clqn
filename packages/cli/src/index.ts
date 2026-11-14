@@ -66,10 +66,27 @@ program.command('clans').description('List your clans').action(async () => {
   output(result, result.clans.map((clan) => `${clan.id}  ${clan.name}`).join('\n') || 'No clans yet.');
 });
 
-program.command('members').description('List clan members').option('--clan <id>', 'clan ID (defaults to the last clan created with init)')
+program.command('join <invite-code>').description('Join a clan using an invitation for your email and select it for this API')
+  .action(async (code: string) => {
+    const config = await readConfig(apiUrl());
+    const clan = await (await client()).joinClan(code);
+    await writeConfig(apiUrl(), { ...config, clanId: clan.id });
+    output(clan, `Joined ${clan.name} (${clan.id})`);
+  });
+
+program.command('invite <email>').description('Create a single-use invitation (clan leaders only)')
+  .option('--clan <id>', 'clan ID (defaults to the last clan created or joined)')
+  .action(async (email: string, options: { clan?: string }) => {
+    const clanId = options.clan ?? (await readConfig(apiUrl())).clanId;
+    if (!clanId) throw new Error('Select a clan with --clan <id>, init <name>, or join <invite-code>');
+    const invitation = await (await client()).createInvitation(clanId, email);
+    output(invitation, `Invitation for ${invitation.email}: ${invitation.code}\nExpires ${invitation.expiresAt}. Share the code privately with the intended member.`);
+  });
+
+program.command('members').description('List clan members').option('--clan <id>', 'clan ID (defaults to the last clan created or joined)')
   .action(async (options: { clan?: string }) => {
     const clanId = options.clan ?? (await readConfig(apiUrl())).clanId;
-    if (!clanId) throw new Error('Select a clan with --clan <id> or create one with init <name>');
+    if (!clanId) throw new Error('Select a clan with --clan <id>, init <name>, or join <invite-code>');
     const result = await (await client()).members(clanId);
     output(result, result.members.map((member) => `${member.email}  ${member.role}  ${member.userId}`).join('\n') || 'No members.');
   });

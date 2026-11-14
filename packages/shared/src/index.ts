@@ -12,6 +12,13 @@ export const clanSchema = z.object({
   id: z.uuid(), name: z.string(), createdBy: z.uuid(), createdAt: z.iso.datetime(),
 });
 export type Clan = z.infer<typeof clanSchema>;
+export const createInvitationSchema = z.object({ email: z.string().trim().toLowerCase().pipe(z.email()) }).strict();
+export const invitationCodeSchema = z.string().regex(/^clqn_inv_[A-Za-z0-9_-]{43}$/);
+export const joinInvitationSchema = z.object({ code: invitationCodeSchema }).strict();
+export const invitationSchema = z.object({
+  code: invitationCodeSchema, clanId: z.uuid(), email: z.email(), expiresAt: z.iso.datetime(),
+});
+export type Invitation = z.infer<typeof invitationSchema>;
 export const clansSchema = z.object({ clans: z.array(clanSchema) });
 export const membersSchema = z.object({ members: z.array(z.object({
   userId: z.uuid(), email: z.email(), role: z.enum(['leader', 'member']), createdAt: z.iso.datetime(),
@@ -60,4 +67,10 @@ export class ClqnClient {
   createClan(name: string): Promise<Clan> { return this.request('/v1/clans', clanSchema, createClanSchema.parse({ name })); }
   listClans() { return this.request('/v1/clans', clansSchema); }
   members(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/members`, membersSchema); }
+  createInvitation(clanId: string, email: string): Promise<Invitation> {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/invitations`, invitationSchema, createInvitationSchema.parse({ email }));
+  }
+  joinClan(code: string): Promise<Clan> {
+    return this.request('/v1/invitations/join', clanSchema, joinInvitationSchema.parse({ code }));
+  }
 }

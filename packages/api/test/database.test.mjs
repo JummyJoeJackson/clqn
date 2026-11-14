@@ -25,6 +25,8 @@ test('PostgreSQL: identity, clan isolation, concurrent creation, and credential 
   t.after(async () => {
     try {
       if (userIds.length) {
+        await sql`delete from events where actor_id in ${sql(userIds)}`;
+        await sql`delete from invitations where created_by in ${sql(userIds)}`;
         await sql`delete from memberships where user_id in ${sql(userIds)}`;
         await sql`delete from clans where created_by in ${sql(userIds)}`;
         await sql`delete from credentials where user_id in ${sql(userIds)}`;
@@ -67,6 +69,35 @@ test('PostgreSQL: identity, clan isolation, concurrent creation, and credential 
   await assert.rejects(connection.store.createClan(randomUUID(), rollbackName), (error) => error.cause?.code === '23503');
   const [count] = await sql`select count(*)::integer as n from clans where name = ${rollbackName}`;
   assert.equal(count.n, 0);
+  // Invitations must be leader-only, email-bound, expiring, and single-use under contention.
+  const invite = (token, clanId, email) => app.request(`/v1/clans/${clanId}/invitations`, {
+    method: 'POST', headers: auth(token), body: JSON.stringify({ email }),
+  });
+  const joinClan = (token, code) => app.request('/v1/invitations/join', {
+    method: 'POST', headers: auth(token), body: JSON.stringify({ code }),
+  });
+  assert.equal((await invite(bob.token, one.id, bob.user.email)).status, 404);
+  const invitationResponse = await invite(alice.token, one.id, ` ${bob.user.email.toUpperCase()} `);
+  assert.equal(invitationResponse.status, 201);
+  const invitation = await invitationResponse.json();
+  assert.equal(invitation.email, bob.user.email);
+  const [storedInvite] = await sql`select code_hash from invitations where code_hash = ${hashToken(invitation.code)}`;
+  assert.equal(storedInvite.code_hash, hashToken(invitation.code));
+  assert.equal((await joinClan(alice.token, invitation.code)).status, 404);
+  const joins = await Promise.all([joinClan(bob.token, invitation.code), joinClan(bob.token, invitation.code)]);
+  assert.deepEqual(joins.map((r) => r.status).sort(), [200, 404]);
+  const joinedMembers = await app.request(`/v1/clans/${one.id}/members`, { headers: auth(bob.token) });
+  assert.equal((await joinedMembers.json()).members.length, 2);
+  assert.equal((await invite(bob.token, one.id, alice.user.email)).status, 404);
+  const duplicate = await (await invite(alice.token, one.id, bob.user.email)).json();
+  assert.equal((await joinClan(bob.token, duplicate.code)).status, 409);
+  const [unconsumed] = await sql`select consumed_at from invitations where code_hash = ${hashToken(duplicate.code)}`;
+  assert.equal(unconsumed.consumed_at, null);
+  const expired = await (await invite(alice.token, two.id, bob.user.email)).json();
+  await sql`update invitations set expires_at = now() - interval '1 second' where code_hash = ${hashToken(expired.code)}`;
+  assert.equal((await joinClan(bob.token, expired.code)).status, 404);
+  const [joinedEvents] = await sql`select count(*)::integer as n from events where clan_id = ${one.id} and type = 'member.joined'`;
+  assert.equal(joinedEvents.n, 1);
   // Exercise the built CLI against a real HTTP server and migrated PostgreSQL.
   const directory = await mkdtemp(join(tmpdir(), 'clqn-postgres-'));
   const server = await new Promise((resolve) => {
@@ -90,6 +121,11 @@ test('PostgreSQL: identity, clan isolation, concurrent creation, and credential 
   const cliClan = await runCli(['init', 'CLI project']);
   assert.equal(cliClan.createdBy, alice.user.id);
   assert.equal((await runCli(['members'])).members[0].role, 'leader');
+  const cliInvite = await runCli(['invite', bob.user.email]);
+  await runCli(['logout']);
+  await runCli(['login', '--token-stdin'], bob.token);
+  assert.equal((await runCli(['join', cliInvite.code])).id, cliClan.id);
+  assert.equal((await runCli(['members'])).members.length, 2);
   assert.equal((await runCli(['logout'])).credentialsRemoved, true);
   assert.equal(await connection.revokeCredential(alice.credentialId), true);
   assert.equal(await connection.revokeCredential(alice.credentialId), false);

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
-import { VERSION, healthSchema, createClanSchema, type User } from '@clqn/shared';
+import { VERSION, healthSchema, createClanSchema, createInvitationSchema, joinInvitationSchema, ApiError, type User } from '@clqn/shared';
 import { hashToken, type WorkspaceStore } from './store.js';
 
 export function createApp(store?: WorkspaceStore) {
@@ -30,6 +30,24 @@ export function createApp(store?: WorkspaceStore) {
     if (!parsed.success) return c.json({ error: { code: 'INVALID_REQUEST', message: 'Provide a clan name between 1 and 100 characters' } }, 400);
     return c.json(await store!.createClan(c.get('user').id, parsed.data.name), 201);
   });
+  const invitationBodyLimit = bodyLimit({ maxSize: 4096, onError: (c) =>
+    c.json({ error: { code: 'INVALID_REQUEST', message: 'Request body is too large' } }, 413) });
+  app.post('/v1/clans/:clanId/invitations', invitationBodyLimit, async (c) => {
+    const id = z.uuid().safeParse(c.req.param('clanId'));
+    if (!id.success) return c.json({ error: { code: 'NOT_FOUND', message: 'Clan not found' } }, 404);
+    const parsed = createInvitationSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: { code: 'INVALID_REQUEST', message: 'Provide a valid email address' } }, 400);
+    const invitation = await store!.createInvitation(c.get('user').id, id.data, parsed.data.email);
+    if (!invitation) return c.json({ error: { code: 'NOT_FOUND', message: 'Clan not found' } }, 404);
+    return c.json(invitation, 201);
+  });
+  app.post('/v1/invitations/join', invitationBodyLimit, async (c) => {
+    const parsed = joinInvitationSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: { code: 'INVALID_REQUEST', message: 'Provide a valid invitation code' } }, 400);
+    const clan = await store!.joinInvitation(c.get('user'), parsed.data.code);
+    if (!clan) return c.json({ error: { code: 'NOT_FOUND', message: 'Invitation not found' } }, 404);
+    return c.json(clan);
+  });
   app.get('/v1/clans/:clanId/members', async (c) => {
     const id = z.uuid().safeParse(c.req.param('clanId'));
     const members = id.success ? await store!.members(c.get('user').id, id.data) : undefined;
@@ -38,6 +56,9 @@ export function createApp(store?: WorkspaceStore) {
   });
   app.notFound((c) => c.json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }, 404));
   app.onError((error, c) => {
+    if (error instanceof ApiError && error.status === 409) {
+      return c.json({ error: { code: error.code, message: error.message } }, 409);
+    }
     // Database errors may contain SQL parameters. Never log request credentials or user data.
     console.error('API request failed', { name: error.name });
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } }, 500);

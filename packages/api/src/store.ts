@@ -1,13 +1,15 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql as query } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import type { Clan, User } from '@clqn/shared';
+import { ApiError, type Clan, type User } from '@clqn/shared';
 import * as schema from './db/schema.js';
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 export type Member = { userId: string; email: string; role: 'leader' | 'member'; createdAt: string };
 export interface WorkspaceStore {
+  createInvitation(userId: string, clanId: string, email: string): Promise<{ code: string; clanId: string; email: string; expiresAt: string } | undefined>;
+  joinInvitation(user: User, code: string): Promise<Clan | undefined>;
   authenticate(tokenHash: string): Promise<User | undefined>;
   createClan(userId: string, name: string): Promise<Clan>;
   listClans(userId: string): Promise<Clan[]>;
@@ -30,6 +32,37 @@ export function createStore(url: string) {
         const [clan] = await tx.insert(schema.clans).values({ name, createdBy: userId }).returning();
         if (!clan) throw new Error('Clan creation returned no row');
         await tx.insert(schema.memberships).values({ clanId: clan.id, userId, role: 'leader' });
+        await tx.insert(schema.events).values({ clanId: clan.id, actorId: userId, type: 'clan.created' });
+        return clanView(clan);
+      });
+    },
+    async createInvitation(userId, clanId, email) {
+      return db.transaction(async (tx) => {
+        const [leader] = await tx.select().from(schema.memberships).where(and(
+          eq(schema.memberships.clanId, clanId), eq(schema.memberships.userId, userId),
+          eq(schema.memberships.role, 'leader')));
+        if (!leader) return undefined;
+        const code = `clqn_inv_${randomBytes(32).toString('base64url')}`;
+        const [invitation] = await tx.insert(schema.invitations).values({ clanId, email, createdBy: userId,
+          codeHash: hashToken(code), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) }).returning();
+        if (!invitation) throw new Error('Invitation creation returned no row');
+        await tx.insert(schema.events).values({ clanId, actorId: userId, type: 'invitation.created' });
+        return { code, clanId, email, expiresAt: invitation.expiresAt.toISOString() };
+      });
+    },
+    async joinInvitation(user, code) {
+      return db.transaction(async (tx) => {
+        // The conditional update locks and consumes exactly one valid invitation. All writes roll back together.
+        const [invitation] = await tx.update(schema.invitations).set({ consumedAt: query`now()` }).where(and(
+          eq(schema.invitations.codeHash, hashToken(code)), eq(schema.invitations.email, user.email),
+          isNull(schema.invitations.consumedAt), gt(schema.invitations.expiresAt, query`now()`))).returning();
+        if (!invitation) return undefined;
+        const [membership] = await tx.insert(schema.memberships).values({ clanId: invitation.clanId, userId: user.id })
+          .onConflictDoNothing().returning();
+        if (!membership) throw new ApiError(409, 'ALREADY_MEMBER', 'You are already a member of this clan');
+        await tx.insert(schema.events).values({ clanId: invitation.clanId, actorId: user.id, type: 'member.joined' });
+        const [clan] = await tx.select().from(schema.clans).where(eq(schema.clans.id, invitation.clanId));
+        if (!clan) throw new Error('Invitation clan not found');
         return clanView(clan);
       });
     },
