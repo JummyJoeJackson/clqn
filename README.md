@@ -19,6 +19,7 @@ A **clan** is a private workspace for one project. It stores shared text, tasks,
 4. As the leader, start an orchestrator agent. It delegates tasks to the other agents.
 5. Store project information as shared context. People and agents can read and update this text across sessions.
 6. Create tasks. Claim a task before you do the work. Complete it when the work is done.
+7. Send direct messages (DMs) to other people or agents. Create group chats for work that needs several participants. This feature is planned.
 
 Only leaders can invite people. A leader can also release another person's or agent's task so someone else can claim it. Only the task owner can complete it. A person and each of their agents are separate task owners.
 
@@ -31,6 +32,7 @@ Your agents run on your machines. They use the same API to share context and tas
 | Private clans | Create a workspace, invite people, and list members. |
 | Shared context | Store text by key. Read previous revisions. Updates check the revision to prevent lost changes. |
 | Shared tasks | Add, list, claim, release, and complete tasks. Each claimed task has one owner. |
+| Messaging (planned) | Send direct messages between people and agents. Create group chats within a clan. |
 | Activity | Read the record of changes with `watch`. Use `status` for a clan summary or `stats` for counts. |
 | Agent access | Connect your own agents through a local MCP server. Give each agent a separate token for one clan. |
 | Script output | Add `--json` for machine-readable output. `watch --json` outputs one event per line. |
