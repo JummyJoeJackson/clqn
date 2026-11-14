@@ -1,0 +1,16 @@
+.git
+.github
+**/node_modules
+**/dist
+**/test
+**/*.tsbuildinfo
+**/coverage
+.env
+.env.*
+**/.env
+**/.env.*
+**/.config
+**/.DS_Store
+AGENTS.md
+PLAN.md
+docs
