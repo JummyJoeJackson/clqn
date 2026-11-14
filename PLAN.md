@@ -51,11 +51,11 @@ Human A + Agent A       Human B + Agent B
 - **Language:** TypeScript
 - **CLI:** Commander.js
 - **Backend:** Hono (HTTP API)
-- **Database:** PostgreSQL (Supabase)
+- **Database:** PostgreSQL (managed on GCP)
 - **ORM:** Drizzle
 - **Agent integration:** MCP TypeScript SDK
 - **Realtime:** Server-Sent Events (SSE)
-- **Hosting:** Railway or equivalent
+- **Hosting:** GCP; choose the simplest managed deployment that fits the API
 - **Optional orchestration:** Deep Agents / LangGraph
 - **Artifacts:** S3-compatible storage (later)
 
