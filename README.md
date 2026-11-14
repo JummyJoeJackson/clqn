@@ -16,7 +16,7 @@ A lightweight, CLI-first tool for humans and their AI agents to collaborate in s
 - **Lightweight:** Keep setup simple and orchestration optional.
 - **Shared context:** Build toward persistent knowledge and task coordination across people, machines, and agent sessions.
 
-clqn is in early development. Personal authentication, private clan creation, membership reads, API health checks, and a local MCP health adapter work today. Invitations, agent registration, shared context, and tasks are next. See the [roadmap](PLAN.md).
+clqn is in early development. Personal authentication, private clan creation, email-bound invitations, membership reads, API health checks, and a local MCP health adapter work today. Agent registration, shared context, and tasks are next. See the [roadmap](PLAN.md).
 
 ## Installation
 
@@ -53,6 +53,17 @@ npm run cli -- whoami
 npm run cli -- init "My project"
 npm run cli -- members --json
 ```
+
+Clan leaders can invite another provisioned user by email, then privately share the returned single-use code:
+
+```sh
+npm run cli -- invite bob@example.com --json
+# Bob logs in with his own credential, then joins:
+npm run cli -- join <invite-code>
+npm run cli -- members
+```
+
+Invitations expire after seven days and require the authenticated user's email to match. `init` and `join` select the clan for subsequent commands; use `--clan <id>` on `invite` or `members` to choose another clan. Email labels are provisioned by the operator and are not proof of mailbox ownership. Invitations are delivered manually; clqn sends no email.
 
 See [authentication and clans](docs/authentication.md) for provisioning, credential storage, and revocation.
 
