@@ -1,3 +1,5 @@
+import { memberPolicySchema, updatePolicySchema, type UpdatePolicy } from './policy.js';
+export * from './policy.js';
 import { z } from 'zod';
 import { actorSchema, agentSchema, agentsSchema, agentRegistrationSchema, registerAgentSchema } from './agents.js';
 import { contextKeySchema, contextEntrySchema, contextListSchema, contextHistorySchema, writeContextSchema } from './context.js';
@@ -86,6 +88,10 @@ export class ClqnClient {
   }
   listAgents(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/agents`, agentsSchema); }
   agentStatus() { return this.request('/v1/agent', agentSchema); }
+  policy(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/policy`, memberPolicySchema); }
+  updatePolicy(clanId: string, policy: UpdatePolicy) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/policy`, memberPolicySchema, updatePolicySchema.parse(policy));
+  }
   listContext(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/context`, contextListSchema); }
   readContext(clanId: string, key: string) {
     contextKeySchema.parse(key);

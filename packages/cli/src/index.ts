@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { ApiError, ClqnClient, VERSION } from '@clqn/shared';
+import { ApiError, ClqnClient, VERSION, updatePolicySchema, type UpdatePolicy } from '@clqn/shared';
 import { serveMcp } from '@clqn/mcp';
 import { readConfig, removeConfig, writeConfig } from './config.js';
 
@@ -99,6 +99,34 @@ const selectedClan = async (options: { clan?: string } = {}) => {
   if (config.clanId) return config.clanId;
   throw new Error('Select a clan with --clan <id>, CLQN_CLAN_ID, init, or join');
 };
+const policy = program.command('policy').description('Save your clan agent preferences (runtime enforcement is not available)');
+const policyOutput = (value: Awaited<ReturnType<ClqnClient['policy']>>) => output(value,
+  `Policy revision ${value.revision} for ${value.userId} in ${value.clanId}\n` +
+  `Token limit: ${value.tokenLimit ?? 'none'} (total input + output across your agents in this clan)\n` +
+  `Allowed models: ${value.allowedModels?.join(', ') ?? 'any'}\nLeader control: ${value.control}\n` +
+  'Saved preferences only. Runtime enforcement is unavailable; this does not grant execution access.');
+policy.command('show').description('Show your saved policy for a clan').option('--clan <id>', 'clan ID')
+  .action(async (options: { clan?: string }) => policyOutput(await (await client()).policy(await selectedClan(options))));
+policy.command('set').description('Update your policy; only your personal credential can change it')
+  .option('--clan <id>', 'clan ID')
+  .option('--token-limit <tokens>', 'total input + output token cap across your clan agents; 0 requests no usage, none removes the cap')
+  .option('--models <ids...>', 'allowed exact model identifiers, separated by spaces; any removes the restriction')
+  .option('--control <level>', 'manual: you start work; approve: approve each leader request; automatic: leader requests within limits')
+  .action(async (options: { clan?: string; tokenLimit?: string; models?: string[]; control?: string }) => {
+    const changes: Record<string, unknown> = {};
+    if (options.tokenLimit !== undefined) {
+      if (options.tokenLimit !== 'none' && !/^\d+$/.test(options.tokenLimit)) throw new Error('Token limit must be a nonnegative integer or none');
+      changes.tokenLimit = options.tokenLimit === 'none' ? null : Number(options.tokenLimit);
+    }
+    if (options.models !== undefined) changes.allowedModels = options.models.length === 1 && options.models[0] === 'any' ? null : options.models;
+    if (options.control !== undefined) changes.control = options.control;
+    // Validate before network access. The API validates again and rejects stale revisions.
+    updatePolicySchema.parse({ ...changes, expectedRevision: 0 });
+    const api = await client();
+    const clanId = await selectedClan(options);
+    const current = await api.policy(clanId);
+    policyOutput(await api.updatePolicy(clanId, { ...changes, expectedRevision: current.revision } as UpdatePolicy));
+  });
 const readText = async () => {
   if (process.stdin.isTTY) throw new Error('Pipe context text on standard input');
   const chunks: Buffer[] = [];

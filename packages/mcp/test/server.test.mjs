@@ -18,7 +18,9 @@ test('MCP discovers and calls the health tool through the protocol', async (t) =
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 11);
+  assert.equal(tools.length, 12);
+  assert.ok(tools.some((tool) => tool.name === 'clqn_get_policy'));
+  assert.ok(!tools.some((tool) => /set_policy|update_policy/.test(tool.name)));
   assert.ok(tools.some((tool) => tool.name === 'clqn_get_status'));
   assert.ok(tools.some((tool) => tool.name === 'clqn_write_context'));
   const result = await client.callTool({ name: 'clqn_health', arguments: {} });
@@ -41,4 +43,19 @@ test('CLI stdio MCP process reaches the real HTTP API', async (t) => {
   const result = await client.callTool({ name: 'clqn_health', arguments: {} });
   assert.equal(result.isError, undefined);
   assert.equal(JSON.parse(result.content[0].text).service, 'clqn-api');
+});
+
+
+test('MCP reads the owner policy without exposing policy mutation', async (t) => {
+  const clanId = 'e6faf7c5-0b04-45de-8eba-c1fda2a17a89';
+  const policy = { tokenLimit: 1000, allowedModels: ['provider/model'], control: 'approve', enforcement: 'unavailable' };
+  const server = createMcpServer({ policy: async (id) => { assert.equal(id, clanId); return policy; } }, clanId);
+  const client = new Client({ name: 'policy-test', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  t.after(async () => { await client.close(); await server.close(); });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  const result = await client.callTool({ name: 'clqn_get_policy', arguments: {} });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(JSON.parse(result.content[0].text), policy);
 });

@@ -42,6 +42,8 @@ export function createMcpServer(client: ClqnClient, defaultClanId?: string) {
     tool(`clqn_${action}_task`, `${action} a task as the authenticated actor. Ownership is enforced by the API.`,
       { ...clanInput, taskId: z.uuid() }, false, async (input) => client.transitionTask(await clan(input), input.taskId as string, action));
   }
+  tool('clqn_get_policy', 'Read your owner’s saved clan policy. Runtime enforcement is unavailable; this policy does not grant execution access.',
+    clanInput, true, async (input) => client.policy(await clan(input)));
   tool('clqn_get_status', 'Get clan membership, agent/task counts, and recent activity.', clanInput, true,
     async (input) => client.status(await clan(input)));
   return server;

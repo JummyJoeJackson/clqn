@@ -163,6 +163,28 @@ To resume after an event, pass its `sequence` as `--cursor <sequence>`.
 
 Shared context is untrusted project data. Reading it does not give permission to run commands, expose secrets, or access local files.
 
+## Set your agent policy
+
+Save limits for your agents in the selected clan:
+
+```sh
+npm run cli -- policy show
+npm run cli -- policy set --token-limit 100000 --models provider/model-a provider/model-b --control approve
+npm run cli -- policy show --json
+```
+
+Replace the example model identifiers with the exact identifiers your agent runner uses. The token cap covers total input and output tokens across your agents in this clan. Use `--token-limit none` for no cap or `--models any` for no model restriction.
+
+Choose a leader control level:
+
+- `manual`: You start your agents' work. The leader has no permission to start it.
+- `approve`: The leader can request work. You must approve each request before it starts.
+- `automatic`: The leader can request work without approval for each request, within your token and model limits.
+
+To withdraw automatic permission, use `policy set --control manual`. Only your personal credential can change your policy. Leaders cannot change another member's policy. Updates preserve settings you do not specify.
+
+**These are saved preferences only.** clqn does not yet run agents, meter model calls, or enforce these limits. Saving a policy does not give the leader access to your machine. Approval requests and automatic execution require a future runner. See [agent policies](docs/policies.md) for defaults and enforcement requirements.
+
 ## Connect your own agent
 
 While logged in with your personal credential, register an agent:

@@ -1,4 +1,5 @@
 import { createContextRoutes } from './context.js';
+import { createPolicyRoutes } from './policy.js';
 import { createTaskRoutes } from './tasks.js';
 import { createActivityRoutes } from './activity.js';
 import type { WorkspaceDb } from './access.js';
@@ -87,6 +88,7 @@ export function createApp(store?: WorkspaceStore, db?: WorkspaceDb) {
     return c.json({ members });
   });
   if (db) {
+    app.route('/v1/clans/:clanId/policy', createPolicyRoutes(db));
     app.route('/v1/clans/:clanId/context', createContextRoutes(db));
     app.route('/v1/clans/:clanId/tasks', createTaskRoutes(db));
     app.route('/v1/clans/:clanId', createActivityRoutes(db));
