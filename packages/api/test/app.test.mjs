@@ -53,7 +53,7 @@ test('authentication hashes credentials and clan creation uses verified actor', 
   const result = await app.request('/v1/clans', { method: 'POST', headers, body: JSON.stringify({ name: ' Project ' }) });
   assert.equal(result.status, 201);
   assert.equal((await result.json()).createdBy, alice.id);
-  for (const body of ['no JSON', '{}', '{"name":" "}', JSON.stringify({ name: 'x'.repeat(101) }),
+  for (const body of ['no JSON', '{}', '{"name":" "}', JSON.stringify({ name: 'x'.repeat(101) }), JSON.stringify({name: '\0'}),
     JSON.stringify({ name: 'Project', createdBy: 'attacker' })]) {
     const response = await app.request('/v1/clans', { method: 'POST', headers, body });
     assert.equal(response.status, 400);

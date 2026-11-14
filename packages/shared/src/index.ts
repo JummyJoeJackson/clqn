@@ -1,4 +1,12 @@
 import { z } from 'zod';
+import { actorSchema, agentSchema, agentsSchema, agentRegistrationSchema, registerAgentSchema } from './agents.js';
+import { contextKeySchema, contextEntrySchema, contextListSchema, contextHistorySchema, writeContextSchema } from './context.js';
+import { taskSchema, tasksSchema, createTaskSchema } from './tasks.js';
+import { eventsSchema, statsSchema, statusSchema } from './activity.js';
+export * from './activity.js';
+export * from './agents.js';
+export * from './context.js';
+export * from './tasks.js';
 
 export const VERSION = '0.1.0';
 export const healthSchema = z.object({
@@ -7,7 +15,7 @@ export const healthSchema = z.object({
 export type Health = z.infer<typeof healthSchema>;
 export const userSchema = z.object({ id: z.uuid(), email: z.email() });
 export type User = z.infer<typeof userSchema>;
-export const createClanSchema = z.object({ name: z.string().trim().min(1).max(100) }).strict();
+export const createClanSchema = z.object({ name: z.string().trim().min(1).max(100).refine((name) => !name.includes('\0'), 'Clan names cannot contain NUL') }).strict();
 export const clanSchema = z.object({
   id: z.uuid(), name: z.string(), createdBy: z.uuid(), createdAt: z.iso.datetime(),
 });
@@ -63,7 +71,7 @@ export class ClqnClient {
     return schema.parse(await response.json());
   }
   health(): Promise<Health> { return this.request('/health', healthSchema); }
-  whoami(): Promise<User> { return this.request('/v1/me', userSchema); }
+  whoami() { return this.request('/v1/me', actorSchema); }
   createClan(name: string): Promise<Clan> { return this.request('/v1/clans', clanSchema, createClanSchema.parse({ name })); }
   listClans() { return this.request('/v1/clans', clansSchema); }
   members(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/members`, membersSchema); }
@@ -73,4 +81,37 @@ export class ClqnClient {
   joinClan(code: string): Promise<Clan> {
     return this.request('/v1/invitations/join', clanSchema, joinInvitationSchema.parse({ code }));
   }
+  registerAgent(clanId: string, name: string) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/agents`, agentRegistrationSchema, registerAgentSchema.parse({ name }));
+  }
+  listAgents(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/agents`, agentsSchema); }
+  agentStatus() { return this.request('/v1/agent', agentSchema); }
+  listContext(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/context`, contextListSchema); }
+  readContext(clanId: string, key: string) {
+    contextKeySchema.parse(key);
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/context/${encodeURIComponent(key)}`, contextEntrySchema);
+  }
+  writeContext(clanId: string, key: string, text: string, expectedRevision: number) {
+    contextKeySchema.parse(key);
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/context/${encodeURIComponent(key)}`, contextEntrySchema,
+      writeContextSchema.parse({ text, expectedRevision }));
+  }
+  contextHistory(clanId: string, key: string) {
+    contextKeySchema.parse(key);
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/context/${encodeURIComponent(key)}/history`, contextHistorySchema);
+  }
+  createTask(clanId: string, description: string) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks`, taskSchema, createTaskSchema.parse({ description }));
+  }
+  listTasks(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks`, tasksSchema); }
+  transitionTask(clanId: string, taskId: string, action: 'claim' | 'release' | 'complete') {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/${action}`, taskSchema, {});
+  }
+
+  events(clanId: string, cursor = 0, limit = 100) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/events?cursor=${cursor}&limit=${limit}`, eventsSchema);
+  }
+  stats(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/stats`, statsSchema); }
+  status(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/status`, statusSchema); }
+
 }

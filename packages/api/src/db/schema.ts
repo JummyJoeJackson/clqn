@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, primaryKey, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, primaryKey, pgEnum, bigserial } from 'drizzle-orm/pg-core';
 
 export const membershipRole = pgEnum('membership_role', ['leader', 'member']);
 
@@ -23,10 +23,19 @@ export const memberships = pgTable('memberships', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [primaryKey({ columns: [table.clanId, table.userId] })]);
 
+export const agents = pgTable('agents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clanId: uuid('clan_id').notNull().references(() => clans.id),
+  ownerId: uuid('owner_id').notNull().references(() => users.id),
+  name: text('name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Opaque credentials are provisioned by the server operator; raw tokens are never stored.
 export const credentials = pgTable('credentials', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id),
+  agentId: uuid('agent_id').references(() => agents.id),
   tokenHash: text('token_hash').notNull().unique(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -44,9 +53,12 @@ export const invitations = pgTable('invitations', {
 });
 
 export const events = pgTable('events', {
+  sequence: bigserial('sequence', { mode: 'number' }).notNull().unique(),
+  resourceId: text('resource_id'),
   id: uuid('id').primaryKey().defaultRandom(),
   clanId: uuid('clan_id').notNull().references(() => clans.id),
   actorId: uuid('actor_id').notNull().references(() => users.id),
+  agentId: uuid('agent_id').references(() => agents.id),
   type: text('type').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

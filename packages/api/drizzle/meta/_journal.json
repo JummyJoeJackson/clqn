@@ -22,6 +22,13 @@
       "when": 1794692544014,
       "tag": "0002_hard_nick_fury",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794694333804,
+      "tag": "0003_clumsy_ironclad",
+      "breakpoints": true
     }
   ]
 }

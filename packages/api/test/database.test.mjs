@@ -27,9 +27,10 @@ test('PostgreSQL: identity, clan isolation, concurrent creation, and credential 
       if (userIds.length) {
         await sql`delete from events where actor_id in ${sql(userIds)}`;
         await sql`delete from invitations where created_by in ${sql(userIds)}`;
+        await sql`delete from credentials where user_id in ${sql(userIds)}`;
+        await sql`delete from agents where owner_id in ${sql(userIds)}`;
         await sql`delete from memberships where user_id in ${sql(userIds)}`;
         await sql`delete from clans where created_by in ${sql(userIds)}`;
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
         await sql`delete from users where id in ${sql(userIds)}`;
       }
     } finally { await connection.close(); await sql.end(); }
@@ -45,7 +46,7 @@ test('PostgreSQL: identity, clan isolation, concurrent creation, and credential 
   const [stored] = await sql`select token_hash from credentials where id = ${alice.credentialId}`;
   assert.equal(stored.token_hash, hashToken(alice.token));
   assert.notEqual(stored.token_hash, alice.token);
-  const app = createApp(connection.store);
+  const app = createApp(connection.store, connection.db);
   const auth = (token) => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json' });
   const create = (token, name) => app.request('/v1/clans', { method: 'POST', headers: auth(token), body: JSON.stringify({ name }) });
   const responses = await Promise.all([create(alice.token, 'Alice one'), create(alice.token, 'Alice two'), create(bob.token, 'Bob')]);
@@ -98,6 +99,33 @@ test('PostgreSQL: identity, clan isolation, concurrent creation, and credential 
   assert.equal((await joinClan(bob.token, expired.code)).status, 404);
   const [joinedEvents] = await sql`select count(*)::integer as n from events where clan_id = ${one.id} and type = 'member.joined'`;
   assert.equal(joinedEvents.n, 1);
+  // Agents inherit the human identity but have an independent, clan-scoped credential.
+  const register = (token, clanId, name) => app.request(`/v1/clans/${clanId}/agents`, {
+    method: 'POST', headers: auth(token), body: JSON.stringify({ name }),
+  });
+  assert.equal((await register(bob.token, two.id, 'Outsider')).status, 404);
+  const registrationResponse = await register(alice.token, one.id, 'Codex');
+  assert.equal(registrationResponse.status, 201);
+  const registration = await registrationResponse.json();
+  assert.equal(registration.agent.ownerId, alice.user.id);
+  const [agentCredential] = await sql`select id, token_hash from credentials where agent_id = ${registration.agent.id}`;
+  assert.equal(agentCredential.token_hash, hashToken(registration.token));
+  const actor = await connection.store.authenticate(hashToken(registration.token));
+  assert.deepEqual(actor, { ...alice.user, agentId: registration.agent.id, clanId: one.id });
+  const current = await app.request('/v1/agent', { headers: auth(registration.token) });
+  assert.deepEqual(await current.json(), registration.agent);
+  assert.equal((await app.request(`/v1/clans/${one.id}/members`, { headers: auth(registration.token) })).status, 200);
+  assert.equal((await app.request(`/v1/clans/${two.id}/members`, { headers: auth(registration.token) })).status, 404);
+  const agentClans = await app.request('/v1/clans', { headers: auth(registration.token) });
+  assert.deepEqual((await agentClans.json()).clans.map((c) => c.id), [one.id]);
+  assert.equal((await register(registration.token, one.id, 'Nested')).status, 403);
+  assert.equal((await invite(registration.token, one.id, bob.user.email)).status, 403);
+  assert.equal((await create(registration.token, 'Forbidden')).status, 403);
+  assert.equal(await connection.revokeCredential(agentCredential.id), true);
+  assert.equal((await app.request('/v1/agent', { headers: auth(registration.token) })).status, 401);
+  const bobAgent = await (await register(bob.token, one.id, 'Claude')).json();
+  await sql`delete from memberships where clan_id = ${one.id} and user_id = ${bob.user.id}`;
+  assert.equal((await app.request('/v1/agent', { headers: auth(bobAgent.token) })).status, 401);
   // Exercise the built CLI against a real HTTP server and migrated PostgreSQL.
   const directory = await mkdtemp(join(tmpdir(), 'clqn-postgres-'));
   const server = await new Promise((resolve) => {

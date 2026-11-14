@@ -2,7 +2,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, gt, isNull, sql as query } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { ApiError, type Clan, type User } from '@clqn/shared';
+import { ApiError, type Clan, type User, type Actor, type Agent } from '@clqn/shared';
+import { requireClan, appendEvent, requirePersonal } from './access.js';
 import * as schema from './db/schema.js';
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
@@ -10,7 +11,10 @@ export type Member = { userId: string; email: string; role: 'leader' | 'member';
 export interface WorkspaceStore {
   createInvitation(userId: string, clanId: string, email: string): Promise<{ code: string; clanId: string; email: string; expiresAt: string } | undefined>;
   joinInvitation(user: User, code: string): Promise<Clan | undefined>;
-  authenticate(tokenHash: string): Promise<User | undefined>;
+  registerAgent(actor: Actor, clanId: string, name: string): Promise<{ agent: Agent; token: string }>;
+  listAgents(actor: Actor, clanId: string): Promise<Agent[]>;
+  agentStatus(actor: Actor): Promise<Agent | undefined>;
+  authenticate(tokenHash: string): Promise<Actor | undefined>;
   createClan(userId: string, name: string): Promise<Clan>;
   listClans(userId: string): Promise<Clan[]>;
   members(userId: string, clanId: string): Promise<Member[] | undefined>;
@@ -20,19 +24,54 @@ export function createStore(url: string) {
   const sql = postgres(url, { max: 5 });
   const db = drizzle(sql);
   const clanView = (clan: typeof schema.clans.$inferSelect): Clan => ({ ...clan, createdAt: clan.createdAt.toISOString() });
+  const agentView = (agent: typeof schema.agents.$inferSelect): Agent => ({ ...agent, createdAt: agent.createdAt.toISOString() });
   const store: WorkspaceStore = {
     async authenticate(tokenHash) {
-      const [result] = await db.select({ id: schema.users.id, email: schema.users.email }).from(schema.credentials)
+      const [result] = await db.select({ id: schema.users.id, email: schema.users.email, agentId: schema.credentials.agentId, clanId: schema.agents.clanId }).from(schema.credentials)
         .innerJoin(schema.users, eq(schema.credentials.userId, schema.users.id))
+        .leftJoin(schema.agents, eq(schema.credentials.agentId, schema.agents.id))
         .where(eq(schema.credentials.tokenHash, tokenHash));
-      return result;
+      if (!result) return undefined;
+      if (!result.agentId) return { id: result.id, email: result.email };
+      if (!result.clanId) return undefined;
+      const actor = { id: result.id, email: result.email, agentId: result.agentId, clanId: result.clanId };
+      try { await requireClan(db, actor, actor.clanId); } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return undefined;
+        throw error;
+      }
+      return actor;
+    },
+    async registerAgent(actor, clanId, name) {
+      requirePersonal(actor);
+      const token = `clqn_${randomBytes(32).toString('base64url')}`;
+      return db.transaction(async (tx) => {
+        await requireClan(tx, actor, clanId);
+        const [agent] = await tx.insert(schema.agents).values({ clanId, ownerId: actor.id, name }).returning();
+        if (!agent) throw new Error('Agent creation returned no row');
+        await tx.insert(schema.credentials).values({ userId: actor.id, agentId: agent.id, tokenHash: hashToken(token) });
+        await appendEvent(tx, { clanId, actorId: actor.id, type: 'agent.registered', resourceId: agent.id });
+        return { agent: agentView(agent), token };
+      });
+    },
+    async listAgents(actor, clanId) {
+      await requireClan(db, actor, clanId);
+      const rows = await db.select().from(schema.agents).where(eq(schema.agents.clanId, clanId))
+        .orderBy(schema.agents.createdAt, schema.agents.id);
+      return rows.map(agentView);
+    },
+    async agentStatus(actor) {
+      if (!actor.agentId || !actor.clanId) return undefined;
+      await requireClan(db, actor, actor.clanId);
+      const [agent] = await db.select().from(schema.agents).where(and(
+        eq(schema.agents.id, actor.agentId), eq(schema.agents.ownerId, actor.id), eq(schema.agents.clanId, actor.clanId)));
+      return agent ? agentView(agent) : undefined;
     },
     async createClan(userId, name) {
       return db.transaction(async (tx) => {
         const [clan] = await tx.insert(schema.clans).values({ name, createdBy: userId }).returning();
         if (!clan) throw new Error('Clan creation returned no row');
         await tx.insert(schema.memberships).values({ clanId: clan.id, userId, role: 'leader' });
-        await tx.insert(schema.events).values({ clanId: clan.id, actorId: userId, type: 'clan.created' });
+        await appendEvent(tx, { clanId: clan.id, actorId: userId, type: 'clan.created' });
         return clanView(clan);
       });
     },
@@ -46,7 +85,7 @@ export function createStore(url: string) {
         const [invitation] = await tx.insert(schema.invitations).values({ clanId, email, createdBy: userId,
           codeHash: hashToken(code), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) }).returning();
         if (!invitation) throw new Error('Invitation creation returned no row');
-        await tx.insert(schema.events).values({ clanId, actorId: userId, type: 'invitation.created' });
+        await appendEvent(tx, { clanId, actorId: userId, type: 'invitation.created' });
         return { code, clanId, email, expiresAt: invitation.expiresAt.toISOString() };
       });
     },
@@ -60,7 +99,7 @@ export function createStore(url: string) {
         const [membership] = await tx.insert(schema.memberships).values({ clanId: invitation.clanId, userId: user.id })
           .onConflictDoNothing().returning();
         if (!membership) throw new ApiError(409, 'ALREADY_MEMBER', 'You are already a member of this clan');
-        await tx.insert(schema.events).values({ clanId: invitation.clanId, actorId: user.id, type: 'member.joined' });
+        await appendEvent(tx, { clanId: invitation.clanId, actorId: user.id, type: 'member.joined' });
         const [clan] = await tx.select().from(schema.clans).where(eq(schema.clans.id, invitation.clanId));
         if (!clan) throw new Error('Invitation clan not found');
         return clanView(clan);
@@ -85,6 +124,7 @@ export function createStore(url: string) {
   };
   return {
     store,
+    db,
     async provisionUser(email: string) {
       const token = `clqn_${randomBytes(32).toString('base64url')}`;
       const result = await db.transaction(async (tx) => {
