@@ -160,15 +160,17 @@ Implement:
 - [x] TypeScript monorepo (CLI, API, shared types)
 - [x] Authentication and clan creation
 - [x] Invitations and membership
-- [ ] Agent registration and MCP integration
-- [ ] Persistent shared context with revision history
-- [ ] Shared task creation, claiming, and completion
-- [ ] Activity event log
-- [ ] `clqn status`, polling-based `clqn watch`, and basic counts in `clqn stats`
+- [x] Agent registration and MCP integration
+- [x] Persistent shared context with revision history
+- [x] Shared task creation, claiming, and completion
+- [x] Activity event log
+- [x] `clqn status`, polling-based `clqn watch`, and basic counts in `clqn stats`
 - [x] JSON output for machine-readable commands
 - [x] Basic tests and installation instructions
 
-**Current slice:** Personal credentials, private clans, membership reads, and leader-created invitations with atomic joining are implemented through the API and CLI. Invitations are email-bound, expire after seven days, and remain single-use under concurrent requests. Membership changes append transactional audit events; event listing is pending. Agent registration with clan-scoped credentials and MCP integration is next. See [authentication setup](docs/authentication.md).
+**Current slice:** The initial MVP implementation is complete: personal and clan-scoped agent credentials, private clans and invitations, versioned shared context, task ownership and release, transactional audit events, status/stats, polling watch, and local stdio MCP tools. Automated acceptance exercises two users and two MCP clients through the real HTTP API and PostgreSQL. The production container and explicit migration entrypoint are verified locally. See [authentication setup](docs/authentication.md) and [GCP deployment](docs/hosting.md).
+
+**Remaining validation:** Deploy the API and managed PostgreSQL on GCP, then run the acceptance workflow on separate machines with real Codex and Claude Code applications. These operator-run checks have not been performed; the automated protocol clients do not establish real application configuration or deployed networking. Resolve any friction from that check before choosing post-MVP features.
 
 **Acceptance test:** Alice uses Codex and Bob uses Claude Code on separate machines. Both connect to the same clan, read/write shared context, coordinate tasks, and observe each other's progress.
 

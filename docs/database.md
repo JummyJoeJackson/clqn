@@ -6,20 +6,28 @@ Use local PostgreSQL for development or managed PostgreSQL on GCP. Set `DATABASE
 npm run db:migrate
 ```
 
-The committed Drizzle migrations create users, credentials, clans, memberships, invitations, and audit events. The schema uses server-assigned user UUIDs, unique credential hashes and membership pairs, and explicit membership roles. Migrations use a single connection suitable for the migration endpoint supplied by your database provider.
+The committed Drizzle migrations create users, credentials, clans, memberships, invitations, agents, context entries and revisions, tasks, and audit events. Credentials and invitation codes are stored as SHA-256 hashes. Membership pairs and context revision numbers are unique within their scope. Agent registrations belong to a human owner and one clan.
+
+Migrations are explicit and use a single connection suitable for the migration endpoint supplied by your database provider. Run migrations before starting the updated API. Application startup does not apply them automatically.
 
 ## Schema changes
 
-Edit `packages/api/src/db/schema.ts`, then generate a migration:
+Edit the feature schema in `packages/api/src/db/schema.ts`, `context.ts`, or `tasks.ts`, then generate a migration:
 
 ```sh
 npm run db:generate
 ```
 
-Review the generated SQL in `packages/api/drizzle` before applying it with `npm run db:migrate`. Commit schema changes and their generated migrations together.
+Review the generated SQL in `packages/api/drizzle` before applying it with `npm run db:migrate`. Commit schema changes and their generated migrations together. Adding a new schema module also requires adding its path to `packages/api/drizzle.config.ts`.
 
-## Current scope
+## Transactions and authorization
 
-No database is needed for health checks or the default smoke tests. Authenticated routes require PostgreSQL and verify personal credentials and clan membership on the server. See [authentication and clans](authentication.md) for provisioning and API routes. Direct SQL access is privileged and remains server-side.
+Authenticated routes require PostgreSQL and verify credentials, clan scope, and membership on the server. Invitation consumption and membership creation commit together. Context writes require the expected revision and append immutable revision rows. Conditional task updates enforce ownership and prevent concurrent claimers from both succeeding. Audit events commit in the same transaction as state changes; event sequences support bounded cursor polling.
 
-Set `TEST_DATABASE_URL` to a dedicated test PostgreSQL database to run integration checks with `npm test`. The suite applies migrations, exercises concurrent clan creation and invitation consumption, identity binding, expiry, isolation, credential revocation, and a two-user CLI-to-API flow, then deletes its own test records. CI provides PostgreSQL and runs this suite on Node 22 and 24. Never point integration tests at a production database.
+See [authentication and collaboration](authentication.md) for provisioning and API routes. Direct SQL access is privileged and remains server-side. Keep `DATABASE_URL` out of CLI and MCP configuration. Health checks need no database and indicate process liveness only.
+
+## Integration checks
+
+Set `TEST_DATABASE_URL` to a dedicated test PostgreSQL database to run integration checks with `npm test`. The suite applies migrations and exercises identity isolation, invitations, scoped agents, context revision conflicts, task ownership and concurrent claims, audit activity, and CLI/MCP flows. It deletes its own test records afterward. Without this variable, database integration tests are skipped; passing smoke tests alone does not verify persistence or concurrency.
+
+CI provides PostgreSQL and runs the suite on Node 22 and 24. Never point integration tests at a production database. Automated MCP protocol checks simulate clients; real Codex and Claude Code setup still needs the [manual acceptance check](authentication.md#manual-acceptance-check).
