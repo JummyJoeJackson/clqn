@@ -7,6 +7,12 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { createStore, hashToken } from '../dist/store.js';
 import { createApp } from '../dist/app.js';
+import { serve } from '@hono/node-server';
+import { promisify } from 'node:util';
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Use a dedicated database: migrations are applied, and only this test's users/clans are deleted.
 test('PostgreSQL: identity, clan isolation, concurrent creation, and credential revocation', {
@@ -61,6 +67,30 @@ test('PostgreSQL: identity, clan isolation, concurrent creation, and credential 
   await assert.rejects(connection.store.createClan(randomUUID(), rollbackName), (error) => error.cause?.code === '23503');
   const [count] = await sql`select count(*)::integer as n from clans where name = ${rollbackName}`;
   assert.equal(count.n, 0);
+  // Exercise the built CLI against a real HTTP server and migrated PostgreSQL.
+  const directory = await mkdtemp(join(tmpdir(), 'clqn-postgres-'));
+  const server = await new Promise((resolve) => {
+    const listener = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 }, () => resolve(listener));
+  });
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const env = { ...process.env, CLQN_CONFIG_DIR: directory };
+  delete env.CLQN_TOKEN;
+  const runCli = (args, input) => {
+    const command = promisify(execFile)(process.execPath, [
+      fileURLToPath(new URL('../../cli/dist/index.js', import.meta.url)),
+      '--api-url', `http://127.0.0.1:${server.address().port}`, '--json', ...args,
+    ], { env });
+    command.child.stdin.end(input);
+    return command.then(({ stdout }) => JSON.parse(stdout));
+  };
+  assert.deepEqual(await runCli(['login', '--token-stdin'], alice.token), alice.user);
+  const cliClan = await runCli(['init', 'CLI project']);
+  assert.equal(cliClan.createdBy, alice.user.id);
+  assert.equal((await runCli(['members'])).members[0].role, 'leader');
+  assert.equal((await runCli(['logout'])).credentialsRemoved, true);
   assert.equal(await connection.revokeCredential(alice.credentialId), true);
   assert.equal(await connection.revokeCredential(alice.credentialId), false);
   const denied = await app.request('/v1/me', { headers: auth(alice.token) });
