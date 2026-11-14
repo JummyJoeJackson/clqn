@@ -18,7 +18,9 @@ test('MCP discovers and calls the health tool through the protocol', async (t) =
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   const { tools } = await client.listTools();
-  assert.deepEqual(tools.map((tool) => tool.name), ['clqn_health']);
+  assert.equal(tools.length, 11);
+  assert.ok(tools.some((tool) => tool.name === 'clqn_get_status'));
+  assert.ok(tools.some((tool) => tool.name === 'clqn_write_context'));
   const result = await client.callTool({ name: 'clqn_health', arguments: {} });
   assert.deepEqual(JSON.parse(result.content[0].text), health);
 });
