@@ -1,4 +1,3 @@
-
 # clqn — Development Plan
 
 ## Overview
@@ -7,59 +6,47 @@
 
 Users bring their own agents (Codex, Claude Code, Cursor, custom agents, etc.) and connect them to a shared cloud workspace called a **clan**.
 
-Agents can share persistent context, coordinate tasks, communicate, and eventually share compute resources across users and machines.
+The MVP lets agents share persistent context and coordinate tasks across users and machines. Additional capabilities follow demonstrated collaboration needs.
 
 **Tagline:** Your agents. My agents. One workspace.
 
 ## Core Principles
 
-1. **CLI-first:** All functionality is accessible through the terminal. No dashboard or GUI required, we can implement commands to render metrics.
+1. **CLI-first:** All functionality is accessible through the terminal. No dashboard or GUI is planned.
 2. **Agent-agnostic:** Support different models, providers, and agent frameworks through MCP.
 3. **Lightweight:** Minimal setup, dependencies, and infrastructure.
 4. **Human-controlled:** Users retain control over their agents, permissions, and resources.
 5. **Persistent collaboration:** Shared knowledge and project progress survive individual agent sessions.
-6. **Modular:** Advanced orchestration and resource sharing are optional extensions.
+6. **Focused scope:** Ship shared context and task coordination before considering optional extensions.
 7. **Open source:** Extensible architecture with clear APIs.
 
 ## Architecture
 
 ```text
-Human A + Agent A       Human B + Agent B
-        |                       |
-    clqn CLI                clqn CLI
-        |                       |
-        +----------+------------+
-                   |
-              MCP / HTTPS
-                   |
-              clqn Cloud API
-                   |
-          +--------+--------+
-          |        |        |
-       Context   Tasks   Messages
-          |        |        |
-          +--------+--------+
-                   |
-             PostgreSQL
-                   |
-          Orchestrater spawned by clan leader
-          (Deep Agents/LangGraph)
+Human A + Agent A                  Human B + Agent B
+        |                                 |
+    clqn CLI / local stdio MCP adapters
+        |                                 |
+        +-------------- HTTPS ------------+
+                         |
+                  One clqn API
+                         |
+              One PostgreSQL database
 ```
 
-### Proposed Tech Stack
+CLI commands and local MCP tools call the same HTTP API. The API owns authentication, clan authorization, and collaboration state. Existing agent tools handle reasoning and execution on their users' machines.
 
-- **Language:** TypeScript
+### MVP Tech Stack
+
+- **Language:** TypeScript npm workspaces
 - **CLI:** Commander.js
 - **Backend:** Hono (HTTP API)
-- **Database:** PostgreSQL (managed on GCP)
-- **ORM:** Drizzle
-- **Agent integration:** MCP TypeScript SDK
-- **Realtime:** Server-Sent Events (SSE)
-- **Hosting:** GCP; choose the simplest managed deployment that fits the API
-- **Optional orchestration:** Deep Agents / LangGraph
-- **Artifacts:** S3-compatible storage (later)
+- **Database:** PostgreSQL with Drizzle
+- **Agent integration:** MCP TypeScript SDK, local stdio transport
+- **Hosting:** One API service on GCP with managed PostgreSQL
+- **Activity updates:** Poll an event-list endpoint with a cursor
 
-The backend manages deterministic collaboration state. Agent frameworks handle reasoning and orchestration, not persistence or authorization.
+Use ordinary database queries and transactions. The MVP needs no queue, cache service, event broker, orchestration framework, separate worker, or object storage. Add infrastructure only when a concrete feature or measured limit requires it.
 
 ## Core Concepts
 
@@ -68,20 +55,21 @@ The backend manages deterministic collaboration state. Agent frameworks handle r
 - **Agent:** AI assistant registered by a member.
 - **Context:** Shared, versioned knowledge accessible to authorized agents.
 - **Task:** Unit of work that a human or agent can create, claim, and complete.
-- **Message:** Communication between members and/or agents.
 - **Event:** Auditable record of actions and state changes.
-- **Coordinator:** Optional agent responsible for orchestration, spawned by the clan leader.
 
 ## CLI Design
 
+Target MVP commands are below; unchecked roadmap items are not available yet.
+
 ```bash
 # Authentication
-clqn login
+clqn login --token-stdin
 clqn logout
 clqn whoami
 
 # Clan management
-clqn init
+clqn init "<name>"
+clqn clans
 clqn join <invite-code>
 clqn invite <email>
 clqn members
@@ -95,7 +83,6 @@ clqn agent status
 # Shared context
 clqn context list
 clqn context read <key>
-clqn context push <file>
 clqn context write <key>
 clqn context history <key>
 
@@ -103,23 +90,17 @@ clqn context history <key>
 clqn task add "<description>"
 clqn task list
 clqn task claim <id>
+clqn task release <id>
 clqn task complete <id>
-clqn task assign <id> <agent>
-
-# Communication
-clqn msg send <recipient> "<message>"
-clqn msg inbox
 
 # Activity and metrics
 clqn watch
 clqn stats
-clqn stats --agent <id>
-clqn stats --since 7d
 ```
 
 Commands should support structured JSON output (`--json`) for scripting and agent consumption.
 
-Use readable, minimal terminal formatting for human output.
+Use readable, minimal terminal formatting for human output. Implement one context input path first (for example, `context write <key>` reading stdin); add file convenience commands when useful. `agent status` reports registration details, not inferred online presence.
 
 ## Agent Integration
 
@@ -133,8 +114,6 @@ clqn_create_task
 clqn_claim_task
 clqn_complete_task
 clqn_list_tasks
-clqn_send_message
-clqn_read_messages
 clqn_get_status
 ```
 
@@ -142,21 +121,21 @@ An agent should be able to join an existing workflow without changing its underl
 
 The CLI and MCP server are adapters over the same backend.
 
-Start with a local stdio MCP server launched by the CLI. Consider remote MCP later.
+Use a local stdio MCP server launched by the CLI. Add tools alongside each working API feature and CLI command, so agents can exercise each slice before the MVP is complete. Remote MCP is outside the MVP.
 
 ## Data Model
 
-Initial entities:
+Add tables only with the feature that uses them:
 
 ```text
 users
+credentials
 clans
 memberships
 agents
 context_entries
 context_revisions
 tasks
-messages
 events
 invitations
 ```
@@ -185,7 +164,7 @@ Implement:
 - [ ] Persistent shared context with revision history
 - [ ] Shared task creation, claiming, and completion
 - [ ] Activity event log
-- [ ] `clqn status`, `clqn watch`, and basic `clqn stats`
+- [ ] `clqn status`, polling-based `clqn watch`, and basic counts in `clqn stats`
 - [x] JSON output for machine-readable commands
 - [x] Basic tests and installation instructions
 
@@ -193,38 +172,33 @@ Implement:
 
 **Acceptance test:** Alice uses Codex and Bob uses Claude Code on separate machines. Both connect to the same clan, read/write shared context, coordinate tasks, and observe each other's progress.
 
-### v0.2 — Communication
+### MVP Implementation Boundaries
 
-- [ ] Agent-to-agent asynchronous messaging
-- [ ] Task assignment and handoff
-- [ ] Task ownership leases to prevent duplicate work
-- [ ] Agent capability profiles
-- [ ] Improved terminal metrics and activity visualization
-- [ ] Notifications and event subscriptions
+- **Authentication:** Keep the current operator-provisioned personal tokens for the first collaboration test. Add scoped agent credentials with registration. Public signup, identity-provider integration, and automated credential rotation are separate decisions.
+- **Invitations:** A leader creates an expiring, single-use invite code bound to the intended email identity; the inviter delivers it manually. Joining requires an authenticated user with that identity. Consume the invitation and add membership in one transaction. No email-delivery service is required. Operator-provisioned email labels are not proof of mailbox ownership.
+- **Agents:** Register an agent under its human owner with a credential restricted to one clan. Start with a name and identity; no capability negotiation, heartbeat service, or agent scheduler.
+- **Context:** Store text by key with immutable numbered revisions. Require the expected revision on updates and return a conflict for stale writes. No branching, merging, embeddings, or automatic conflict resolution.
+- **Tasks:** Start with open, claimed, and completed states. Claim with one conditional database update; only the owning actor can complete a claimed task. Provide an explicit owner release or leader reset for abandoned claims. No leases, renewal timers, automatic reassignment, or delegation engine.
+- **Events:** Append audit rows in the same transaction as state changes. List them with bounded cursor pagination. `watch` polls this endpoint at a modest interval; no SSE or pub/sub service unless polling proves inadequate.
+- **Status and stats:** Show members, registered agents, task counts, and recent activity using ordinary queries. Defer time-series storage, dashboards, presence tracking, and configurable analytics.
+- **Deployment:** Run one API service and managed PostgreSQL. Keep migrations explicit and credentials server-side. No multi-region architecture or shared execution environment.
 
-### v0.3 — Intelligent Coordination
+Keep authorization, atomic writes, revision conflict checks, and task ownership even when simplifying. They protect the basic collaboration workflow.
 
-- [ ] Optional coordinator agent spawned by the clan leader
-- [ ] Deep Agents/LangGraph integration
-- [ ] Automatic task decomposition and delegation
-- [ ] Agent capability discovery
-- [ ] Context branching and merging
-- [ ] Knowledge provenance and decision history
-- [ ] Evaluate A2A integration for independent agent delegation
+### After the MVP — Candidate Improvements
 
-The coordinator must be optional. Core collaboration should work without running an additional LLM.
+Choose the next small feature from actual usage after the two-person acceptance test. These are candidates, not committed release requirements:
 
-### v1.0 — Distributed Resources
+- Asynchronous messages, if shared context and tasks leave a communication gap.
+- Explicit task assignment and handoff, if claiming and releasing tasks are insufficient.
+- Activity filters or SSE, if basic counts and polling fail a demonstrated need.
+- Task leases or capability profiles, only if real unattended workflows require them.
 
-- [ ] Opt-in shared compute pool (CPU/GPU)
-- [ ] Sandboxed remote job execution
-- [ ] Resource availability and capability discovery
-- [ ] Usage accounting and quotas
-- [ ] Shared compute budgets
-- [ ] Permissioned model routing
-- [ ] Artifact sharing and storage
+### Uncommitted Future Ideas
 
-Never expose members' private API keys or execute arbitrary remote code on host machines without explicit authorization and isolation.
+Optional coordination, context branching, agent interoperability protocols, artifact storage, and distributed compute are outside the implementation plan. They require a separate proposal with a concrete use case, costs, and security boundaries before work begins. Do not choose orchestration frameworks or build supporting abstractions in advance.
+
+Shared compute in particular is a separate product-sized effort, not a prerequisite for a stable release of the collaboration tool. Never expose members' private API keys or execute arbitrary remote code on host machines without explicit authorization and isolation.
 
 ## Security Requirements
 
@@ -234,7 +208,7 @@ Never expose members' private API keys or execute arbitrary remote code on host 
 - No automatic access to local files, secrets, or compute.
 - Shared context treated as untrusted data, not authoritative instructions.
 - Human approval for privileged or destructive actions.
-- Audit logs for context changes, task operations, and resource usage.
+- Audit logs for membership, agent, context, and task changes as those features are implemented.
 - Explicit opt-in and sandboxing for future compute sharing.
 
 ## Website (Later)
@@ -270,9 +244,10 @@ All product functionality remains CLI-accessible.
 3. Implement clans, membership, and agent registration.
 4. Implement shared context and revision history.
 5. Implement shared tasks and activity events.
-6. Expose functionality through local MCP tools.
-7. Validate cross-user, cross-agent collaboration.
-8. Add messaging and advanced coordination incrementally.
+6. Validate cross-user, cross-agent collaboration through the CLI and local MCP tools.
+7. Fix friction found in the acceptance test before choosing any post-MVP feature.
+
+Each feature includes its API, thin adapters, and relevant tests; do not postpone agent access to a separate integration phase.
 
 ## Development Guidelines for Coding Agents
 
@@ -281,7 +256,7 @@ All product functionality remains CLI-accessible.
 - Avoid premature abstractions, vector databases, and orchestration frameworks.
 - Use strongly typed API contracts and shared schemas.
 - Design commands to be composable, predictable, and scriptable.
-- Keep dependencies minimal.
+- Keep dependencies minimal. Prefer a direct implementation over a plugin system, generic repository layer, or extension framework for hypothetical future features.
 - Write tests for authorization, concurrent writes, and task ownership.
 - Preserve backward compatibility in the CLI and API where practical.
 - Document architectural decisions and tradeoffs.
