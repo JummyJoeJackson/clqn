@@ -9,12 +9,30 @@
 
 A lightweight, CLI-first tool for humans and their AI agents to collaborate in shared workspaces called **clans**.
 
-## Why clqn?
+## How clans work
 
-- **CLI-first:** Work from the terminal, with JSON output for scripts and agents.
-- **Agent-agnostic:** Connect your own agents through MCP, without changing models or frameworks.
-- **Lightweight:** Keep setup simple and orchestration optional.
-- **Shared context:** Keep versioned knowledge and coordinate owned tasks across people, machines, and agent sessions.
+A **clan** is a private workspace for one project. It stores shared text, tasks, and a record of changes.
+
+1. Create a clan. You become its **leader**.
+2. Invite other people. They join as **members** with their own accounts.
+3. Register your agents. Each agent belongs to you and can access only its assigned clan.
+4. Store project information as shared context. People and agents can read and update this text across sessions.
+5. Create tasks. Claim a task before you do the work. Complete it when the work is done.
+
+Only leaders can invite people. A leader can also release another person's or agent's task so someone else can claim it. Only the task owner can complete it. A person and each of their agents are separate task owners.
+
+Your agents run on your machines. They use the same API to share context and tasks. clqn does not run or schedule them.
+
+## Features
+
+| Feature | What you can do |
+| --- | --- |
+| Private clans | Create a workspace, invite people, and list members. |
+| Shared context | Store text by key. Read previous revisions. Updates check the revision to prevent lost changes. |
+| Shared tasks | Add, list, claim, release, and complete tasks. Each claimed task has one owner. |
+| Activity | Read the record of changes with `watch`. Use `status` for a clan summary or `stats` for counts. |
+| Agent access | Connect your own agents through a local MCP server. Give each agent a separate token for one clan. |
+| Script output | Add `--json` for machine-readable output. `watch --json` outputs one event per line. |
 
 The initial MVP implements personal authentication, private clans, email-bound invitations, clan-scoped agent credentials, versioned shared context, task coordination, activity polling, and local stdio MCP tools. Deployment and testing with two real agent applications remain operator-run steps. See the [roadmap](PLAN.md).
 
@@ -29,66 +47,118 @@ npm run build
 
 ## Example usage
 
-Start the local API:
+Run these commands from the repository root after installation. Replace values in angle brackets, such as `<task-id>`, with actual values.
+
+### 1. Start the API
+
+For local development, configure PostgreSQL and apply the [database migrations](docs/database.md). Then start the API:
 
 ```sh
 npm run dev
 ```
 
-In another terminal, check the connection:
+In another terminal, check that the API is running:
 
 ```sh
 npm run cli -- health
 # clqn-api 0.1.0: ok
-
-npm run cli -- health --json
-# {"status":"ok","service":"clqn-api","version":"0.1.0"}
 ```
 
-With PostgreSQL configured, a server operator can provision a personal credential. Then log in and create a private clan:
+The health check does not check the database. To use a remote API, set `CLQN_API_URL` to its HTTPS URL in each client terminal.
+
+### 2. Create a clan
+
+Ask the server operator for a personal token. See [credential provisioning](docs/authentication.md#provision-a-credential-server-operator) to run your own server. Save only the token in a private file, then log in:
 
 ```sh
-npm run cli -- login --token-stdin < /secure/path/to/token-file
+npm run cli -- login --token-stdin < /secure/path/to/alice-token
 npm run cli -- whoami
 npm run cli -- init "My project"
-npm run cli -- members --json
+npm run cli -- members
 ```
 
-Clan leaders can invite another provisioned user by email, then privately share the returned single-use code:
+You are now the clan leader. `init` selects the new clan for later commands. Use `clans` to list your clans. Add `--clan <clan-id>` to a clan command to use a different clan.
+
+### 3. Invite a member
+
+As the leader, create an invitation for Bob's account:
 
 ```sh
-npm run cli -- invite bob@example.com --json
-# Bob logs in with his own credential, then joins:
+npm run cli -- invite bob@example.com
+```
+
+Share the returned code with Bob privately. In his own terminal, Bob logs in with his personal token and joins:
+
+```sh
+npm run cli -- login --token-stdin < /secure/path/to/bob-token
 npm run cli -- join <invite-code>
 npm run cli -- members
 ```
 
-Invitations expire after seven days and require the authenticated user's email to match. `init` and `join` select the clan for subsequent commands; use `--clan <id>` on clan commands to choose another clan. Email labels are provisioned by the operator and are not proof of mailbox ownership. Invitations are delivered manually; clqn sends no email.
+`join` selects the clan for Bob. Each code works once and expires after seven days. Bob's account email must match the invitation. The operator sets account email labels; clqn does not verify mailbox ownership or send invitations by email.
 
-See [authentication and clans](docs/authentication.md) for provisioning, credential storage, and revocation.
+### 4. Share project context
 
-## Share context and coordinate tasks
-
-Context writes read stdin. Use revision `0` to create a key and the current revision to update it; a stale write returns a conflict instead of overwriting someone else's change.
+In Alice's terminal, create a text entry named `conventions`. Context writes read standard input. Revision `0` means the key must be new:
 
 ```sh
-printf 'Use npm test before committing.\n' | npm run cli -- context write conventions --expected-revision 0
-npm run cli -- context read conventions
-npm run cli -- context history conventions
-npm run cli -- context list --json
-npm run cli -- task add "Review the API contract"
-npm run cli -- task list --json
-npm run cli -- task claim <task-id>
-npm run cli -- task complete <task-id>
-npm run cli -- status --json
-npm run cli -- stats
-npm run cli -- watch --once --json
-npm run cli -- watch --cursor 42 --interval 3
+printf 'Run npm test before each commit.\n' | npm run cli -- context write conventions --expected-revision 0
+# Wrote conventions revision 1
 ```
 
-Only the actor that claimed a task can complete it. That actor can release it; a human clan leader can also release abandoned claims. A human and each registered agent are distinct task owners. `watch --json` emits one event object per line; resume with the last observed event's `sequence`. `--once` drains currently available pages and exits.
+Bob can read the same entry from his terminal:
 
-Shared context is untrusted project data. Reading it never authorizes executing instructions, exposing secrets, or accessing local files.
+```sh
+npm run cli -- context read conventions
+# Run npm test before each commit.
+```
+
+To update revision `1`, supply `--expected-revision 1`:
+
+```sh
+printf 'Run npm test and npm run typecheck before each commit.\n' | npm run cli -- context write conventions --expected-revision 1
+npm run cli -- context history conventions
+npm run cli -- context list --json
+```
+
+If another person or agent updated the entry first, the write fails with a conflict. Read the latest revision before you try again.
+
+### 5. Claim and complete a task
+
+Alice creates a task:
+
+```sh
+npm run cli -- task add "Review the API contract"
+```
+
+Bob lists tasks and copies the task ID from the output. He uses that ID to claim and complete the task:
+
+```sh
+npm run cli -- task list
+npm run cli -- task claim <task-id>
+# Do the work, then mark it complete.
+npm run cli -- task complete <task-id>
+```
+
+A task moves from `open` to `claimed` to `completed`. To return a claimed task to `open`, its owner or the human clan leader uses `task release <task-id>`.
+
+### 6. Check progress
+
+```sh
+npm run cli -- status
+npm run cli -- stats --json
+npm run cli -- watch
+```
+
+`watch` polls for changes every three seconds. Press Ctrl+C to stop. To fetch the available events and exit:
+
+```sh
+npm run cli -- watch --once --json
+```
+
+To resume after an event, pass its `sequence` as `--cursor <sequence>`.
+
+Shared context is untrusted project data. Reading it does not give permission to run commands, expose secrets, or access local files.
 
 ## Connect your own agent
 
