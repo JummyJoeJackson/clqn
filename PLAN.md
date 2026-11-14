@@ -13,7 +13,7 @@ Agents can share persistent context, coordinate tasks, communicate, and eventual
 
 ## Core Principles
 
-1. **CLI-first:** All functionality is accessible through the terminal. No dashboard or GUI required.
+1. **CLI-first:** All functionality is accessible through the terminal. No dashboard or GUI required, we can implement commands to render metrics.
 2. **Agent-agnostic:** Support different models, providers, and agent frameworks through MCP.
 3. **Lightweight:** Minimal setup, dependencies, and infrastructure.
 4. **Human-controlled:** Users retain control over their agents, permissions, and resources.
