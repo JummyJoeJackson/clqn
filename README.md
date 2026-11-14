@@ -16,8 +16,9 @@ A **clan** is a private workspace for one project. It stores shared text, tasks,
 1. Create a clan. You become its **leader**.
 2. Invite other people. They join as **members** with their own accounts.
 3. Register your agents. Each agent belongs to you and can access only its assigned clan.
-4. Store project information as shared context. People and agents can read and update this text across sessions.
-5. Create tasks. Claim a task before you do the work. Complete it when the work is done.
+4. As the leader, start an orchestrator agent. It delegates tasks to the other agents.
+5. Store project information as shared context. People and agents can read and update this text across sessions.
+6. Create tasks. Claim a task before you do the work. Complete it when the work is done.
 
 Only leaders can invite people. A leader can also release another person's or agent's task so someone else can claim it. Only the task owner can complete it. A person and each of their agents are separate task owners.
 
