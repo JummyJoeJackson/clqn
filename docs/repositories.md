@@ -2,7 +2,7 @@
 
 GitHub stores the shared code. The clan API stores task assignments, commit references, and reported PR results. A local worker uses Git to prepare and publish code. The leader's designated orchestrator uses `gh` to check and merge PRs.
 
-Each task starts from a known commit. Local repositories can have different active branches. New work starts from a recorded base rather than requiring everyone to pull after every commit.
+Each task starts from a known commit. Only the local `main` checkout is eligible for automatic sync. Task branches and their worktrees stay on their recorded commits until explicitly updated.
 
 ## Set up the participants
 
@@ -25,13 +25,31 @@ Configure each agent with its own returned token, `CLQN_API_URL`, and `CLQN_CLAN
 
 Registration does not launch a model. Start your chosen agent using its existing application or runtime. The orchestrator role persists in the API across process restarts. Only one orchestrator registration is permitted per clan; registration replacement is not implemented. An operator can revoke its credential using the authentication guide, but revocation does not remove its registration.
 
-## Create and assign a task
+## Automatically sync only main
 
-In the orchestrator's local clone, fetch the integration branch and get its commit:
+Keep one checkout on `main` and run a foreground watcher on each participating machine:
 
 ```sh
-git fetch origin
-git rev-parse origin/main
+clqn repo sync --repo owner/project --repo-path ~/Projects/project --watch
+```
+
+The watcher fetches only `refs/heads/main` from origin every 15 seconds. It fast-forwards the selected local `main` checkout after confirming its origin and local state. It never fetches all branches, switches to main from another branch, pushes main, or updates task worktrees. `--repo` must match the local origin; the command uses local Git credentials and does not require a clan API login.
+
+Omit `--watch` to sync once. Use `--interval <seconds>` between 1 and 3600 to change the polling interval. `--json` emits one result per successful polling attempt, including skipped updates. Human output prints when the result changes. Results include `status` (`updated`, `unchanged`, or `skipped`), local and remote SHAs, and a `reason` when skipped.
+
+A dirty checkout, in-progress Git operation, local-only commits, or divergent history prevents automatic updates. A checkout on a feature branch is left there; its local main is not advanced until the selected checkout is back on main. Ignored-file collisions fail rather than overwrite local contents. Resolve these conditions explicitly, then let the next poll retry. There is no autostash, rebase, merge commit, reset, or automatic conflict resolution.
+
+Network or Git errors are reported to stderr. A watcher retries on the next interval; a one-shot command exits nonzero. A skipped sync returns a structured result without changing local files. Ctrl+C or SIGTERM stops the loop and cancels an active Git subprocess. The watcher runs only while the command is active; it is not installed as a background service or launched automatically with agent sessions.
+
+Syncing main does not update task base SHAs, mark tasks integrated, or complete tasks. Keep task branches isolated. After syncing, use the current main commit as the base for dependent work.
+
+## Create and assign a task
+
+With the orchestrator's clone on main, sync it and get its commit:
+
+```sh
+clqn repo sync --repo owner/project --repo-path .
+git rev-parse main
 ```
 
 Use the full 40-character lowercase SHA in the assignment:
@@ -115,11 +133,11 @@ clqn task complete <task-id>
 
 Only the claimant can complete it. A task with repository metadata must have a recorded integration first. The leader and orchestrator cannot complete the worker's task on its behalf.
 
-Before delegating a dependent task, fetch the integration branch and record its new SHA. Keep independent active tasks on their pinned branches. If an active branch needs newer code, update it with normal Git commands at an explicit checkpoint, resolve conflicts, rerun checks, and publish again. clqn does not automatically merge into active worktrees or edit the personal checkout.
+Before delegating a dependent task, sync main and record its new SHA. Keep independent active tasks on their pinned branches. If an active branch needs newer code, update it with normal Git commands at an explicit checkpoint, resolve conflicts, rerun checks, and publish again. Automatic sync is restricted to a clean main checkout; it never merges into active task worktrees.
 
 ## Events and the trust boundary
 
-Use `clqn watch` to observe `task.assigned`, `task.unassigned`, `task.repository_updated`, and `task.integrated`. Workers report pushes; orchestrators check PR status. There is no GitHub webhook receiver or automatic observation of arbitrary pushes, merges, or local commits. The task CLI publishes and checks on demand; `watch` polls the clan event log.
+Use `clqn watch` to observe `task.assigned`, `task.unassigned`, `task.repository_updated`, and `task.integrated`. Workers report pushes; orchestrators check PR status. There is no GitHub webhook receiver or automatic PR integration reporter. `repo sync --watch` observes upstream main changes through Git polling and updates only local main. It does not report arbitrary pushes or merges to the API. The task CLI publishes, checks, and records integration on demand; `clqn watch` polls the clan event log.
 
 API repository and integration endpoints store authenticated reports. The server does not hold GitHub credentials or verify a reported SHA with GitHub. `publish`, `merge`, and `integrate` perform local Git/GitHub verification before reporting. Direct API and MCP callers must perform that verification themselves. A leader-appointed orchestrator is trusted to make integration reports.
 

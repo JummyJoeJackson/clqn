@@ -103,6 +103,9 @@ clqn task claim <id>
 clqn task release <id>
 clqn task complete <id>
 
+# Local main synchronization
+clqn repo sync --repo <owner/repo> --repo-path <clone> --watch
+
 # Activity and metrics
 clqn watch
 clqn stats
@@ -189,6 +192,8 @@ Implement:
 **Current slice:** The initial MVP implementation is complete: personal and clan-scoped agent credentials, private clans and invitations, versioned shared context, task ownership and release, transactional audit events, status/stats, polling watch, and local stdio MCP tools. Automated acceptance exercises two users and two MCP clients through the real HTTP API and PostgreSQL. The production container and explicit migration entrypoint are verified locally. See [authentication setup](docs/authentication.md) and [GCP deployment](docs/hosting.md).
 
 **Repository coordination slice:** Implemented a permanent designated orchestrator role, worker assignments and compare-and-clear unassignment, task repository/base SHA/branch references, isolated local worktree preparation, non-force publication, exact-head PR checks and squash merge, confirmed integration reports, and ownership-gated completion. API and MCP remain adapters around server-side authorization; Git and `gh` operate locally. See [repository workflow](docs/repositories.md).
+
+**Main-only automatic sync:** Implemented `clqn repo sync --watch` as a local foreground polling command. Fetch only `origin/main`, and fast-forward only the selected clean main checkout. Skip dirty, diverged, locally ahead, or non-main checkouts; never automatically update task branches/worktrees. Polling errors retry. Sync does not launch agents or update task integration records.
 
 **Execution boundary:** Registration does not launch or keep model processes running. Existing agent runtimes invoke these tools. Member token/model/control policies are persisted, but hard usage enforcement and execution approvals still need metering and a runner. DMs/group chats, unattended scheduling, automatic webhook ingestion, and conflict resolution are not implemented.
 

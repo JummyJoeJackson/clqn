@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, chmod } from 'node:fs/promises';
 import { tmpdir, devNull } from 'node:os';
 import { join } from 'node:path';
-import { prepareWorktree, publishWorktree, inspectPullRequest, mergePullRequest } from '../dist/git.js';
+import { fileURLToPath } from 'node:url';
+import { once } from 'node:events';
+import { prepareWorktree, publishWorktree, inspectPullRequest, mergePullRequest, syncMain } from '../dist/git.js';
 
 const execute = promisify(execFile);
 const git = async (cwd, args) => (await execute('git', args, { cwd, encoding: 'utf8' })).stdout.trim();
@@ -60,6 +62,7 @@ const cp = require('node:child_process');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.CLQN_TEST_LOG,JSON.stringify({file:'git',args})+'\\n');
 const network = args.some(x => ['fetch','push','ls-remote'].includes(x));
+if (args.includes('fetch') && process.env.CLQN_TEST_FAIL_FETCH && fs.existsSync(process.env.CLQN_TEST_FAIL_FETCH)) process.exit(65);
 const extra = network ? ['-c','url.'+process.env.CLQN_TEST_REMOTE+'.insteadOf=https://github.com/test/project.git','-c','protocol.file.allow=always'] : [];
 const result = cp.spawnSync(process.env.CLQN_TEST_GIT,[...extra,...args],{stdio:'inherit'});
 process.exit(result.status ?? 1);
@@ -199,4 +202,166 @@ test('merge matches the reviewed head, respects pending queues, and reports only
   assert.equal(merges.length, 2);
   assert.ok(merges.every(({args}) => args.includes('--match-head-commit') && args.includes(f.baseSha)
     && !args.includes('--admin') && !args.includes('--auto')));
+});
+
+
+async function advanceMain(f) {
+  const writer = join(f.root, 'writer');
+  await git(f.root, ['clone', '--branch', 'main', f.remote, writer]);
+  await git(writer, ['config', 'user.email', 'test@example.com']);
+  await git(writer, ['config', 'user.name', 'Test']);
+  await writeFile(join(writer, 'merged.txt'), 'merged task result\n');
+  await git(writer, ['add', '.']); await git(writer, ['commit', '-m', 'merge task result']);
+  await git(writer, ['push', 'origin', 'main']);
+  return git(writer, ['rev-parse', 'HEAD']);
+}
+
+test('main sync fast-forwards clean main without updating active task worktrees or fetching their branches', async (t) => {
+  const f = await fixture(t);
+  await prepareWorktree(f);
+  await writeFile(join(f.worktreePath, 'task-draft.txt'), 'active task edits\n');
+  const taskStatus = await git(f.worktreePath, ['status', '--porcelain=v1']);
+  const remoteSha = await advanceMain(f);
+  const result = await syncMain({ repoPath: f.repoPath, repository: f.repository.slug });
+  assert.deepEqual(result, { repository: 'test/project', path: f.repoPath, branch: 'main', status: 'updated',
+    previousSha: f.baseSha, headSha: remoteSha, remoteSha });
+  assert.equal(await readFile(join(f.repoPath, 'merged.txt'), 'utf8'), 'merged task result\n');
+  assert.equal(await git(f.worktreePath, ['rev-parse', 'HEAD']), f.baseSha);
+  assert.equal(await git(f.worktreePath, ['status', '--porcelain=v1']), taskStatus);
+  assert.equal(await readFile(join(f.worktreePath, 'task-draft.txt'), 'utf8'), 'active task edits\n');
+  assert.equal((await syncMain({ repoPath: f.repoPath, repository: f.repository.slug })).status, 'unchanged');
+  const syncFetches = (await f.commands()).filter(({ args }) => args.includes('fetch')).slice(1);
+  assert.ok(syncFetches.every(({ args }) => args.includes('refs/heads/main:refs/remotes/origin/main') && !args.includes('--all')));
+});
+
+test('main sync skips tracked or untracked changes, even with autostash configured', async (t) => {
+  const f = await fixture(t);
+  await git(f.repoPath, ['config', 'merge.autostash', 'true']);
+  await advanceMain(f);
+  await writeFile(join(f.repoPath, 'file.txt'), 'personal main edits\n');
+  const tracked = await syncMain({ repoPath: f.repoPath, repository: f.repository.slug });
+  assert.equal(tracked.reason, 'dirty');
+  assert.equal(await git(f.repoPath, ['rev-parse', 'HEAD']), f.baseSha);
+  assert.equal(await readFile(join(f.repoPath, 'file.txt'), 'utf8'), 'personal main edits\n');
+  await git(f.repoPath, ['restore', 'file.txt']);
+  await writeFile(join(f.repoPath, 'merged.txt'), 'personal untracked file\n');
+  assert.equal((await syncMain({ repoPath: f.repoPath, repository: f.repository.slug })).reason, 'dirty');
+  assert.equal(await readFile(join(f.repoPath, 'merged.txt'), 'utf8'), 'personal untracked file\n');
+  assert.equal(await git(f.repoPath, ['rev-parse', 'HEAD']), f.baseSha);
+  assert.ok(!(await f.commands()).some(({ args }) => args.includes('stash') || args.includes('reset')));
+});
+
+test('main sync skips local commits and divergence instead of rebasing, merging, or resetting them', async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.repoPath, 'local.txt'), 'personal local commit\n');
+  await git(f.repoPath, ['add', '.']); await git(f.repoPath, ['commit', '-m', 'local main work']);
+  const localSha = await git(f.repoPath, ['rev-parse', 'HEAD']);
+  assert.equal((await syncMain({ repoPath: f.repoPath, repository: f.repository.slug })).reason, 'local_commits');
+  await advanceMain(f);
+  const result = await syncMain({ repoPath: f.repoPath, repository: f.repository.slug });
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.reason, 'diverged');
+  assert.equal(await git(f.repoPath, ['rev-parse', 'HEAD']), localSha);
+  assert.ok(!(await f.commands()).some(({ args }) => args.includes('merge') || args.includes('rebase') || args.includes('reset')));
+});
+
+test('main sync never switches or advances a checked-out feature branch', async (t) => {
+  const f = await fixture(t);
+  await git(f.repoPath, ['switch', '-c', 'feature/active']);
+  await writeFile(join(f.repoPath, 'draft.txt'), 'unfinished feature\n');
+  const remoteSha = await advanceMain(f);
+  const result = await syncMain({ repoPath: f.repoPath, repository: f.repository.slug });
+  assert.equal(result.reason, 'not_main');
+  assert.equal(result.remoteSha, remoteSha);
+  assert.equal(await git(f.repoPath, ['symbolic-ref', '--short', 'HEAD']), 'feature/active');
+  assert.equal(await git(f.repoPath, ['rev-parse', 'refs/heads/main']), f.baseSha);
+  assert.equal(await git(f.repoPath, ['rev-parse', 'HEAD']), f.baseSha);
+  assert.equal(await readFile(join(f.repoPath, 'draft.txt'), 'utf8'), 'unfinished feature\n');
+});
+
+test('main sync skips an in-progress merge and rejects a mismatched origin', async (t) => {
+  const f = await fixture(t);
+  await advanceMain(f);
+  const mergeHead = join(f.repoPath, await git(f.repoPath, ['rev-parse', '--git-path', 'MERGE_HEAD']));
+  await writeFile(mergeHead, f.baseSha+'\n');
+  assert.equal((await syncMain({ repoPath: f.repoPath, repository: f.repository.slug })).reason, 'operation_in_progress');
+  assert.equal(await git(f.repoPath, ['rev-parse', 'HEAD']), f.baseSha);
+  await assert.rejects(syncMain({ repoPath: f.repoPath, repository: 'other/project' }), /Origin does not match/);
+});
+
+
+test('main sync refuses to overwrite ignored local files that become tracked remotely', async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.repoPath, '.git', 'info', 'exclude'), 'merged.txt\n');
+  await writeFile(join(f.repoPath, 'merged.txt'), 'private ignored contents\n');
+  assert.equal(await git(f.repoPath, ['status', '--porcelain=v1']), '');
+  await advanceMain(f);
+  await assert.rejects(syncMain({ repoPath: f.repoPath, repository: f.repository.slug }), /git merge failed/);
+  assert.equal(await git(f.repoPath, ['rev-parse', 'HEAD']), f.baseSha);
+  assert.equal(await readFile(join(f.repoPath, 'merged.txt'), 'utf8'), 'private ignored contents\n');
+});
+
+const cli = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+test('repo sync CLI runs without the clan API and emits structured main-only results', async (t) => {
+  const f = await fixture(t);
+  const remoteSha = await advanceMain(f);
+  const { stdout, stderr } = await execute(process.execPath, [cli, 'repo', 'sync', '--repo', 'test/project',
+    '--repo-path', f.repoPath, '--json'], { env: { ...process.env, CLQN_API_URL: 'http://127.0.0.1:1' } });
+  assert.equal(JSON.parse(stdout).headSha, remoteSha);
+  assert.equal(JSON.parse(stdout).branch, 'main');
+  assert.equal(JSON.parse(stdout).status, 'updated');
+  assert.equal(stderr, '');
+  for (const interval of ['0', 'NaN', '3601']) {
+    await assert.rejects(execute(process.execPath, [cli, 'repo', 'sync', '--repo', 'test/project',
+      '--repo-path', f.repoPath, '--interval', interval, '--json']), (error) => {
+      assert.match(JSON.parse(error.stderr).error.message, /interval/); return true;
+    });
+  }
+  await assert.rejects(execute(process.execPath, [cli, 'repo', 'sync', '--repo', 'test/project',
+    '--repo-path', f.repoPath, '--branch', 'feature']), (error) => {
+    assert.match(error.stderr, /unknown option/); return true;
+  });
+});
+
+test('repo sync watcher recovers from fetch errors, picks up later main commits, and stops on SIGTERM', { timeout: 20_000 }, async (t) => {
+  const f = await fixture(t);
+  const failFetch = join(f.root, 'fail-fetch');
+  const child = spawn(process.execPath, [cli, 'repo', 'sync', '--repo', 'test/project', '--repo-path', f.repoPath,
+    '--watch', '--interval', '1', '--json'], { env: { ...process.env, CLQN_TEST_FAIL_FETCH: failFetch }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const closed = once(child, 'close');
+  t.after(async () => { if (child.exitCode === null) child.kill('SIGTERM'); await closed; });
+  let buffer = '';
+  let stderr = '';
+  const results = [];
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stdout.on('data', (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split('\n'); buffer = lines.pop();
+    for (const line of lines) if (line) results.push(JSON.parse(line));
+  });
+  const waitFor = async (predicate) => {
+    const deadline = Date.now() + 10_000;
+    while (!results.some(predicate)) {
+      if (child.exitCode !== null) throw new Error(`Watcher exited early: ${stderr}`);
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for sync result: ${stderr}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+  await waitFor((result) => result.status === 'unchanged');
+  await writeFile(failFetch, 'simulate a transient fetch failure');
+  const deadline = Date.now() + 10_000;
+  while (!stderr.includes('REPO_SYNC_FAILED')) {
+    if (Date.now() > deadline) throw new Error('Watcher did not report a fetch failure');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await rm(failFetch);
+  await waitFor(() => results.filter((result) => result.status === 'unchanged').length >= 2);
+  const remoteSha = await advanceMain(f);
+  await waitFor((result) => result.status === 'updated' && result.headSha === remoteSha);
+  child.kill('SIGTERM');
+  const [code, signal] = await closed;
+  assert.equal(code, 0);
+  assert.equal(signal, null);
+  assert.ok(stderr.trim().split('\n').every((line) => JSON.parse(line).error.code === 'REPO_SYNC_FAILED'));
+  assert.equal(await git(f.repoPath, ['rev-parse', 'HEAD']), remoteSha);
 });

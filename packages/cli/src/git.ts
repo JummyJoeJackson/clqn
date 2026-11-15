@@ -15,10 +15,10 @@ const shaPattern = /^[a-f0-9]{40}$/;
 const slugPattern = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const prFields = 'number,url,state,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,isCrossRepository,mergeCommit,statusCheckRollup';
 
-async function command(file: 'git' | 'gh', args: string[], cwd?: string): Promise<string> {
+async function command(file: 'git' | 'gh', args: string[], cwd?: string, signal?: AbortSignal): Promise<string> {
   try {
     const { stdout } = await execute(file, args, {
-      ...(cwd ? { cwd } : {}), encoding: 'utf8', timeout: 120_000, maxBuffer: 4 * 1024 * 1024,
+      ...(cwd ? { cwd } : {}), ...(signal ? { signal } : {}), encoding: 'utf8', timeout: 120_000, maxBuffer: 4 * 1024 * 1024,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', GIT_OPTIONAL_LOCKS: '0' },
     });
     return stdout.trim();
@@ -29,7 +29,7 @@ async function command(file: 'git' | 'gh', args: string[], cwd?: string): Promis
     throw new Error(`${file} ${args.find((arg) => !arg.startsWith('-') && !arg.includes('=')) ?? 'operation'} failed. Check repository access and local state.`);
   }
 }
-const git = (cwd: string, args: string[]) => command('git', ['-c', `core.hooksPath=${devNull}`, '-c', 'core.fsmonitor=false', '-c', 'protocol.ext.allow=never', ...args], cwd);
+const git = (cwd: string, args: string[], signal?: AbortSignal) => command('git', ['-c', `core.hooksPath=${devNull}`, '-c', 'core.fsmonitor=false', '-c', 'protocol.ext.allow=never', ...args], cwd, signal);
 
 function slug(value: string): string {
   if (!slugPattern.test(value) || value.endsWith('.git') || value.includes('..')) throw new Error('Repository must be a GitHub owner/repo slug');
@@ -196,4 +196,55 @@ export async function mergePullRequest(input: {
   const after = await inspectPullRequest(input);
   if (after.headSha !== input.headSha) throw new Error('Pull request head changed during merge; inspect the pull request before reporting integration');
   return after;
+}
+
+
+export interface MainSyncResult {
+  repository: string;
+  path: string;
+  branch: 'main';
+  status: 'updated' | 'unchanged' | 'skipped';
+  reason?: 'not_main' | 'dirty' | 'operation_in_progress' | 'local_commits' | 'diverged' | 'no_local_main';
+  previousSha: string | null;
+  headSha: string | null;
+  remoteSha: string;
+}
+
+// Sync only the selected main checkout. Task branches and other worktrees are never updated.
+export async function syncMain(input: { repoPath: string; repository: string; signal?: AbortSignal }): Promise<MainSyncResult> {
+  const runGit = (cwd: string, args: string[]) => git(cwd, args, input.signal);
+  const repoPath = await realpath(input.repoPath);
+  const root = await realpath(await runGit(repoPath, ['rev-parse', '--show-toplevel']));
+  const repository = slug(input.repository);
+  await verifyOrigin(root, repository);
+  await runGit(root, ['fetch', '--no-tags', '--no-recurse-submodules', 'origin',
+    'refs/heads/main:refs/remotes/origin/main']);
+  const remoteSha = await runGit(root, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
+  if (!shaPattern.test(remoteSha)) throw new Error('Origin main does not resolve to a commit');
+  let previousSha: string | null;
+  try { previousSha = await runGit(root, ['rev-parse', '--verify', 'refs/heads/main^{commit}']); }
+  catch { previousSha = null; }
+  const result: MainSyncResult = { repository, path: root, branch: 'main', status: 'skipped',
+    previousSha, headSha: previousSha, remoteSha };
+  if ((await runGit(root, ['rev-parse', '--abbrev-ref', 'HEAD'])) !== 'main') return { ...result, reason: 'not_main' };
+  if (!previousSha) return { ...result, reason: 'no_local_main' };
+  for (const name of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer']) {
+    const path = resolve(root, await runGit(root, ['rev-parse', '--git-path', name]));
+    try { await lstat(path); return { ...result, reason: 'operation_in_progress' }; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  }
+  if (await runGit(root, ['status', '--porcelain=v1', '--untracked-files=all'])) return { ...result, reason: 'dirty' };
+  if (previousSha === remoteSha) return { ...result, status: 'unchanged' };
+  try { await runGit(root, ['merge-base', '--is-ancestor', previousSha, remoteSha]); }
+  catch {
+    try {
+      await runGit(root, ['merge-base', '--is-ancestor', remoteSha, previousSha]);
+      return { ...result, reason: 'local_commits' };
+    } catch { return { ...result, reason: 'diverged' }; }
+  }
+  // Disable configured autostash and force fast-forward-only behavior, regardless of user merge settings.
+  await runGit(root, ['-c', 'merge.autostash=false', 'merge', '--ff-only', '--no-edit', '--no-overwrite-ignore', remoteSha]);
+  const headSha = await runGit(root, ['rev-parse', 'refs/heads/main']);
+  if (headSha !== remoteSha) throw new Error('Main changed during sync; inspect the checkout before retrying');
+  return { ...result, status: 'updated', headSha };
 }

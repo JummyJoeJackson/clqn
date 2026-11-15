@@ -26,7 +26,7 @@ The orchestrator is a permanent role in the collaboration model. Register your c
 
 - **Shared context:** Read and update text by key, with revision checks and history.
 - **Task ownership:** Assign work to an agent. Only its claimant can complete it.
-- **Repository coordination:** Prepare isolated worktrees at known commits. Publish PRs and record confirmed integration.
+- **Repository coordination:** Prepare isolated worktrees at known commits. Publish PRs and record confirmed integration. Automatically sync only `main`.
 - **Activity:** Watch assignments, published results, and integrations from the terminal.
 - **Member policies:** Save token caps, model allowlists, and leader control preferences. Runtime enforcement is not yet available.
 - **CLI and MCP:** Use terminal commands or agent tools. Add `--json` for scripts.
@@ -157,11 +157,23 @@ clqn task merge <task-id>
 
 `merge` requires passing checks, matches the recorded PR head, and respects GitHub protections. It records integration only after GitHub confirms a merge. If a merge queue is still processing, run `clqn task integrate <task-id>` after it finishes.
 
-The worker can then run `clqn task complete <task-id>`. A repository task cannot complete before integration is recorded. Fetch the updated base branch before creating dependent tasks. Existing task worktrees stay on their own branches; clqn does not pull changes into everyone's working directories.
+The worker can then run `clqn task complete <task-id>`. A repository task cannot complete before integration is recorded. Use the latest `main` commit before creating dependent tasks. Existing task worktrees stay on their recorded branches and commits; automatic sync never updates them.
 
 For a task without code changes, use `clqn task add "Review the release notes"`, then claim and complete it without repository commands. See the [repository workflow](docs/repositories.md) for recovery, permissions, and current limits.
 
-### 6. Check progress
+### 6. Keep only main synced
+
+Keep your main checkout on the `main` branch. In a separate terminal on each machine, run:
+
+```sh
+clqn repo sync --repo owner/project --repo-path ~/Projects/project --watch
+```
+
+The watcher polls only `origin/main` every 15 seconds and fast-forwards a clean local `main`. It skips dirty checkouts, local commits, diverged history, and checkouts on other branches. It never switches branches, pushes main, rebases, resets, or updates task worktrees. Stop it with Ctrl+C. Omit `--watch` for a single sync; add `--json` for structured results.
+
+The watcher runs locally while this command is active. It does not start with an agent session automatically or update task integration records. `clqn watch` below observes clan events; it does not sync Git.
+
+### 7. Check progress
 
 ```sh
 clqn status

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { ApiError, ClqnClient, VERSION, updatePolicySchema, type UpdatePolicy, repositoryInputSchema, type Task } from '@clqn/shared';
+import { ApiError, ClqnClient, VERSION, updatePolicySchema, type UpdatePolicy, repositoryInputSchema, repositorySlugSchema, type Task } from '@clqn/shared';
 import { serveMcp } from '@clqn/mcp';
 import { readConfig, removeConfig, writeConfig } from './config.js';
-import { prepareWorktree, publishWorktree, inspectPullRequest, mergePullRequest } from './git.js';
+import { prepareWorktree, publishWorktree, inspectPullRequest, mergePullRequest, syncMain } from './git.js';
 
 const program = new Command()
   .name('clqn')
@@ -20,6 +20,48 @@ program.command('health').description('Check API liveness (not clan status or da
   const health = await new ClqnClient(apiUrl()).health();
   output(health, `${health.service} ${health.version}: ${health.status}`);
 });
+
+const repo = program.command('repo').description('Keep only local main in sync with origin/main');
+repo.command('sync').description('Fast-forward a clean main checkout; task branches are never updated')
+  .requiredOption('--repo <owner/repo>', 'expected GitHub repository')
+  .option('--repo-path <directory>', 'local main checkout', '.')
+  .option('--watch', 'keep syncing main until interrupted')
+  .option('--interval <seconds>', 'watch polling interval (1–3600 seconds)', '15')
+  .action(async (options: { repo: string; repoPath: string; watch?: boolean; interval: string }) => {
+    const repository = repositorySlugSchema.parse(options.repo);
+    const interval = Number(options.interval);
+    if (!Number.isFinite(interval) || interval < 1 || interval > 3600) throw new Error('Use an interval between 1 and 3600 seconds');
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once('SIGINT', stop); process.once('SIGTERM', stop);
+    let previous = '';
+    try {
+      while (!controller.signal.aborted) {
+        try {
+          const result = await syncMain({ repoPath: options.repoPath, repository, signal: controller.signal });
+          const signature = JSON.stringify(result);
+          if (program.opts().json || signature !== previous) {
+            output(result, `${result.repository} main: ${result.status}${result.reason ? ` (${result.reason})` : ''}\n` +
+              `Local: ${result.headSha ?? 'missing'}  Origin: ${result.remoteSha}`);
+          }
+          previous = signature;
+        } catch (error) {
+          if (controller.signal.aborted) break;
+          if (!options.watch) throw error;
+          previous = '';
+          const message = error instanceof Error ? error.message : 'Repository sync failed';
+          console.error(program.opts().json ? JSON.stringify({ error: { code: 'REPO_SYNC_FAILED', message } }) : `Sync failed: ${message}`);
+        }
+        if (!options.watch || controller.signal.aborted) break;
+        await new Promise<void>((resolve) => {
+          const done = () => { clearTimeout(timer); controller.signal.removeEventListener('abort', done); resolve(); };
+          const timer = setTimeout(done, interval * 1000);
+          controller.signal.addEventListener('abort', done, { once: true });
+          if (controller.signal.aborted) done();
+        });
+      }
+    } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+  });
 
 program.command('login').description('Save a server-provisioned user token for this API')
   .option('--token-stdin', 'read the token from standard input')
