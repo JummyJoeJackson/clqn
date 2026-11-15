@@ -81,6 +81,12 @@ The leader registers one orchestrator with `clqn agent add Coordinator --orchest
 
 The orchestrator can assign/unassign open tasks and report integrations within its clan. It cannot invite members, register agents, change a member's policy, release someone else's task claim, or complete their work. Registering the role does not launch a model process. Configure the scoped token in the leader's existing agent runtime. See [repository workflow](repositories.md).
 
+## GitHub repository links
+
+Only a personal clan leader can run `clqn repo link` or `clqn repo unlink`. Workers and the orchestrator can read linked repository metadata and clan main-change events, but cannot retrieve setup secrets or change links. GitHub admin credentials stay local in `gh`; the API holds a server-only root signing key and derives a different secret for each repository/clan link. It stores neither root nor derived keys in PostgreSQL.
+
+`POST /hooks/github/:id` is outside bearer authentication and verifies a raw-body GitHub signature instead. Its audit actor is the integration owner, not the GitHub pusher. Link metadata is clan-scoped; notification and delivery deduplication commit together. See [webhook setup](webhooks.md).
+
 ## Collaboration rules
 
 Context keys store text up to 65,536 UTF-8 bytes. Write via stdin and provide `--expected-revision 0` for a new key or the current revision for an update. Revisions are numbered and immutable; stale writes return `409 REVISION_CONFLICT`. Use `context history <key>` to inspect prior values. Shared context is untrusted data, and reading it grants no authority to execute instructions or expose secrets.
@@ -104,6 +110,10 @@ All `/v1` operations require `Authorization: Bearer <token>` and return JSON. Th
 | POST | `/v1/clans/:clanId/agents` | Register from `{ "name": "Codex", "role": "worker" }`; personal credential required; `orchestrator` requires leader |
 | GET | `/v1/clans/:clanId/agents` | List clan registrations |
 | GET | `/v1/agent` | Registration for the authenticated agent |
+| POST | `/v1/clans/:clanId/repositories` | Personal leader links `{ "slug": "owner/project" }` and receives sensitive webhook setup |
+| GET | `/v1/clans/:clanId/repositories` | List clan link metadata without secrets |
+| GET | `/v1/clans/:clanId/repositories/:id` | Read one clan link and its main-event watermark |
+| POST | `/v1/clans/:clanId/repositories/:id/unlink` | Personal leader disables a link |
 | GET | `/v1/clans/:clanId/context` | List context keys and current revisions |
 | GET | `/v1/clans/:clanId/context/:key` | Read current context text |
 | GET | `/v1/clans/:clanId/context/:key/history` | Read immutable revisions |

@@ -7,199 +7,43 @@
 
 > Your agents. My agents. One workspace.
 
-A lightweight, CLI-first tool for humans and their AI agents to collaborate in shared workspaces called **clans**.
+Collaborating on long-horizon development tasks can get complicated quickly. Bloated context, merge conflicts, and unclear task ownership is common, especially when each collaborator works with several agents.
 
-## How clans work
+Existing solutions introduce a lot of setup overhead. clqn is an extra lighweight CLI for people and their own AI agents to quickly share context, assign tasks, message one another, and coordinate work. Each collaborator runs their own agents, which connect to clqn through MCP.
 
-A **clan** is a private project workspace. It stores shared text, tasks, agent registrations, and a record of changes.
-
-1. Create a clan. You become its **leader**.
-2. Invite other people. They join with their own accounts and register their agents.
-3. Register one **orchestrator** under the leader. It assigns tasks and coordinates integration through the CLI or MCP.
-4. Give each coding task a repository, starting commit, and branch. The worker claims the task and prepares a separate local worktree.
-5. The worker commits its changes, pushes its branch, and reports a pull request. The orchestrator checks and merges the result.
-6. Start dependent tasks from the merged code. Shared context keeps decisions available across agent sessions.
-
-The orchestrator is a permanent role in the collaboration model. Register your chosen agent in that role; clqn does not launch a model process or keep it running. Agents use their existing local tools and permissions. Direct messages and group chats remain planned features.
-
-## Features
-
-- **Shared context:** Read and update text by key, with revision checks and history.
-- **Task ownership:** Assign work to an agent. Only its claimant can complete it.
-- **Repository coordination:** Prepare isolated worktrees at known commits. Publish PRs and record confirmed integration. Automatically sync only `main`.
-- **Activity:** Watch assignments, published results, and integrations from the terminal.
-- **Member policies:** Save token caps, model allowlists, and leader control preferences. Runtime enforcement is not yet available.
-- **CLI and MCP:** Use terminal commands or agent tools. Add `--json` for scripts.
+clqn stands for **clan**. Each clan has a **leader** who invites members and registers the orchestrator. **Members** register their own worker agents.
 
 ## Installation
 
-Install the CLI with Node.js 22 or newer:
+Requires Node.js 22+. Code workflows also need Git and an authenticated GitHub CLI (`gh`).
 
 ```sh
 npm install -g clqn
-clqn --version
-```
-
-
-## Example usage
-
-Account and clan commands work from any directory. Run code commands from the project clone or task directory as noted below. Replace values in angle brackets, such as `<task-id>`, with actual values.
-
-### 1. Connect to the hosted API
-
-Set the API URL supplied by your clqn operator. Replace the example URL with your deployment's HTTPS URL:
-
-```sh
 export CLQN_API_URL="https://your-clqn-host.example"
-clqn health
-# clqn-api 0.1.0: ok
+clqn login < /secure/path/to/personal-token
 ```
 
-Set `CLQN_API_URL` in each terminal, or add it to your shell configuration. All clan members must connect to the same API. You do not need to run a local server or database. The health check confirms that the API is running; it does not check the database.
-
-### 2. Create a clan
-
-Get a personal token from your clqn operator. Save only the token in a private file, then log in:
+## Create or join a clan
 
 ```sh
-clqn login < /secure/path/to/alice-token
-clqn whoami
 clqn init "My project"
-clqn members
-```
-
-You are now the clan leader. `init` selects the new clan for later commands. Use `clans` to list your clans. Add `--clan <clan-id>` to a clan command to use a different clan.
-
-### 3. Invite a member
-
-As the leader, create an invitation for Bob's account:
-
-```sh
 clqn invite bob@example.com
-```
 
-Share the returned code with Bob privately. In his own terminal, Bob logs in with his personal token and joins:
-
-```sh
-clqn login < /secure/path/to/bob-token
+# Bob logs in with his own token, then joins.
 clqn join <invite-code>
-clqn members
 ```
 
-`join` selects the clan for Bob. Each code works once and expires after seven days. Bob's account email must match the invitation. The operator sets account email labels; clqn does not verify mailbox ownership or send invitations by email.
-
-### 4. Share project context
-
-In Alice's terminal, create a text entry named `conventions`. Context writes read standard input. Revision `0` means the key must be new:
+## Connect agents
 
 ```sh
-printf 'Run npm test before each commit.\n' | clqn context write conventions --expected-revision 0
-# Wrote conventions revision 1
-```
-
-Bob can read the same entry from his terminal:
-
-```sh
-clqn context read conventions
-# Run npm test before each commit.
-```
-
-To update revision `1`, supply `--expected-revision 1`:
-
-```sh
-printf 'Run npm test and npm run typecheck before each commit.\n' | clqn context write conventions --expected-revision 1
-clqn context history conventions
-clqn context list --json
-```
-
-If another person or agent updated the entry first, the write fails with a conflict. Read the latest revision before you try again.
-
-### 5. Coordinate code changes
-
-Install Git and the GitHub CLI (`gh`) on each machine that works with code. Authenticate each machine with GitHub. Each local clone must have an `origin` that points to the task's GitHub repository.
-
-As the leader, register your chosen orchestrator once:
-
-```sh
+# Leader: register the clan's orchestrator.
 clqn agent add Coordinator --orchestrator --json
-```
 
-Keep its returned token private and configure it in the orchestrator's environment. Register workers with `clqn agent add Codex --json`. These commands register identities; they do not start agent processes.
-
-From the project clone, the orchestrator creates a code task and assigns it to a worker. `--code` uses this repository, fetches the latest `origin/main`, and chooses a unique task branch:
-
-```sh
-clqn task add "Review the API contract" --code
-clqn task assign <task-id> --agent <worker-agent-id>
-```
-
-In the worker's session, run this from the project clone using its own agent token:
-
-```sh
-clqn task start <task-id>
-```
-
-`start` claims the task and prepares a separate worktree. It chooses a directory beside the clone and prints its path. Running it again resumes the same worktree. Your existing checkout stays in place.
-
-Change into the printed directory. Do the work, run tests, and commit. Then submit from that directory:
-
-```sh
-clqn task submit <task-id>
-```
-
-The worker pushes without force, creates or reuses the matching PR, and reports its head commit to the clan. In the orchestrator's session:
-
-```sh
-clqn task check <task-id>
-clqn task merge <task-id>
-```
-
-`merge` requires passing checks, matches the recorded PR head, and respects GitHub protections. It records integration only after GitHub confirms a merge. If a merge queue is still processing, run `clqn task merge <task-id>` again after it finishes.
-
-The worker can then run `clqn task done <task-id>`. A repository task cannot complete before integration is recorded. Use the latest `main` commit before creating dependent tasks. Existing task worktrees stay on their recorded branches and commits; automatic sync never updates them.
-
-For a task without code changes, use `clqn task add "Review the release notes"`, then use `task start` and `task done` without creating a worktree. See the [repository workflow](docs/repositories.md) for recovery, permissions, and current limits.
-
-### 6. Keep only main synced
-
-Keep your main checkout on the `main` branch. In a separate terminal on each machine, run:
-
-```sh
-cd ~/Projects/project
-clqn sync --watch
-```
-
-The repository is read from `origin`; paths default to the current directory. Use `--path <directory>` to select another checkout. The watcher polls only `origin/main` every 15 seconds and fast-forwards a clean local `main`. It skips dirty checkouts, local commits, diverged history, and checkouts on other branches. It never switches branches, pushes main, rebases, resets, or updates task worktrees. Stop it with Ctrl+C. Omit `--watch` for a single sync; add `--json` for structured results.
-
-The watcher runs locally while this command is active. It does not start with an agent session automatically or update task integration records. `clqn watch` below observes clan events; it does not sync Git.
-
-### 7. Check progress
-
-```sh
-clqn status
-clqn stats --json
-clqn watch
-```
-
-`watch` polls for changes every three seconds. Press Ctrl+C to stop. To fetch the available events and exit:
-
-```sh
-clqn watch --once --json
-```
-
-To resume after an event, pass its `sequence` as `--cursor <sequence>`.
-
-
-## Connect your own agent
-
-While logged in with your personal credential, register an agent:
-
-```sh
+# Each member: register a worker.
 clqn agent add Codex --json
-clqn agent list
 ```
 
-The response contains `{ "agent": { ... }, "token": "clqn_..." }`. The token is shown once; store it privately. Registration leaves your saved personal login unchanged. Give each agent its own registration and token. Configure the local stdio server in your agent's MCP settings. Replace the API URL, token, and clan ID. The `clqn` command must be available on your agent's `PATH`:
+Each returns an agent token shown once. Save it privately and use it in that agent's MCP configuration:
 
 ```json
 {
@@ -217,40 +61,73 @@ The response contains `{ "agent": { ... }, "token": "clqn_..." }`. The token is 
 }
 ```
 
-
-## Set your agent policy
-
-Save limits for your agents in the selected clan:
+## Share context
 
 ```sh
-clqn limits
-clqn limits --tokens 100000 --models provider/model-a provider/model-b --control approve
-clqn limits --json
+printf 'Run npm test before committing.\n' | clqn context write conventions --expected-revision 0
+clqn context read conventions
+clqn context history conventions
 ```
 
-Replace the example model identifiers with the exact identifiers your agent runner uses. The token cap covers total input and output tokens across your agents in this clan. Use `--tokens none` for no cap or `--models any` for no model restriction.
+## Coordinate work
 
-Choose a leader control level:
+Code tasks use isolated Git worktrees so agents can work in parallel, with GitHub PRs for review and merging.
 
-- `manual`: You start your agents' work. The leader has no permission to start it.
-- `approve`: The leader can request work. You must approve each request before it starts.
-- `automatic`: The leader can request work without approval for each request, within your token and model limits.
+Run from the project clone, using each agent's credentials in its session:
 
-Leaders cannot change another member's policy. These settings are saved preferences; token metering, execution approvals, and automatic agent launching are not implemented. They do not currently enforce model or usage limits. See [agent policies](docs/policies.md).
+```sh
+# Orchestrator: create and assign.
+clqn task add "Review the API contract" --code
+clqn task assign <task-id> --agent <worker-agent-id>
 
-The earlier command names still work. See the [command reference](docs/commands.md) for aliases and explicit overrides.
+# Assigned worker: open a worktree, work, commit, and submit a PR.
+clqn task start <task-id>
+cd <printed-worktree-path>
+# Make changes, test, and commit.
+clqn task submit <task-id>
+
+# Orchestrator: verify checks and merge.
+clqn task check <task-id>
+clqn task merge <task-id>
+
+# Task owner: complete after integration.
+clqn task done <task-id>
+```
+
+`--code` selects origin/main and a unique branch (omit for non-code tasks). 
+
+## Sync main
+
+```sh
+# Leader: configure the GitHub webhook once per repository/clan.
+clqn repo link
+
+# Each member: run from the main checkout.
+clqn sync --watch
+```
+
+Linking requires repository admin access and a [configured HTTPS API](docs/webhooks.md#server-setup). Syncs only updates `main` (task branches are unchanged). Omit `--watch` to sync once.
+
+## Limits and activity
+
+```sh
+clqn limits --tokens 100000 --models provider/model --control approve
+clqn limits       # Saved preferences; limits and approvals are not enforced yet.
+clqn status       # Clan and task counts.
+clqn stats        # Member, agent, and task counts.
+clqn watch        # Activity feed; does not sync Git.
+```
+
+Add `--json` for scripting. 
 
 ## Documentation
 
-- [Simple commands and compatibility](docs/commands.md)
-
-- [Repository workflow and orchestrator](docs/repositories.md)
-- [Agent policies](docs/policies.md)
-- [Project architecture and roadmap](PLAN.md)
-- [GCP hosting](docs/hosting.md)
-- [Database setup and migrations](docs/database.md)
-- [Authentication and clans](docs/authentication.md)
+- [Commands and aliases](docs/commands.md)
+- [Repository workflow](docs/repositories.md) · [GitHub notifications](docs/webhooks.md)
+- [Authentication](docs/authentication.md) · [Agent policies](docs/policies.md)
+- [Database setup](docs/database.md) · [GCP hosting](docs/hosting.md)
+- [Architecture and roadmap](PLAN.md)
 
 ## Contributing
 
-See the [contribution guide](CONTRIBUTING.md) for local development, project structure, and checks. Keep changes small and focused on the current milestone.
+[Report an issue](https://github.com/rli8145/clqn/issues) or read the [contribution guide](CONTRIBUTING.md) before submitting a pull request.

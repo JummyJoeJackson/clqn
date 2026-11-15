@@ -81,6 +81,20 @@ Cloud Run's unauthenticated transport allows the CLI to send its clqn bearer cre
 
 Point clients at the returned service URL with `CLQN_API_URL`. Give each agent its registered token through `CLQN_TOKEN` and set `CLQN_CLAN_ID` for its stdio MCP process. Keep database credentials server-side.
 
+## GitHub webhook secret
+
+To enable repository notifications, store a high-entropy root key in GCP Secret Manager and expose its pinned version as `GITHUB_WEBHOOK_SECRET` on the API service. Grant the runtime service account access to this secret as with `DATABASE_URL`. The key must have at least 32 characters and stay consistent across instances; `openssl rand -hex 32` generates a suitable value. Keep the value out of shell arguments, source control, build arguments, and client configuration.
+
+For a webhook-enabled deployment, extend the service's existing `--set-secrets` mapping:
+
+```sh
+--set-secrets "DATABASE_URL=$CLQN_DB_SECRET:$CLQN_DB_SECRET_VERSION,GITHUB_WEBHOOK_SECRET=clqn-github-webhook-secret:1"
+```
+
+This is a deployment flag fragment, not a separate shell command. The migration job does not need the webhook key. A service without the key can still serve existing APIs and clients can use slower local Git fallback checks, but link setup and delivery return 503.
+
+The public HTTPS service must route `/hooks/github/*` to the API without requiring a bearer token or GCP IAM login. Those requests are authenticated using GitHub signatures, while `/v1` retains its normal bearer/clan checks. Apply migration `0006` first, then have each clan leader run `clqn repo link` using local GitHub admin access. See [webhook setup](webhooks.md) for rotation and recovery.
+
 ## Verify a deployment
 
 `GET /health` checks process liveness only. It does not indicate database readiness or authorization. Verify the deployed API with authenticated `whoami`, a clan membership read, and a context/task workflow in a test clan. Run the [two-person acceptance check](authentication.md#manual-acceptance-check) with separate machines and two real agent applications before relying on a deployment for collaboration. Automated local integration and container checks do not verify cloud networking or real agent application settings.

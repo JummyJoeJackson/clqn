@@ -5,7 +5,10 @@ Use a short command for each common action. Commands use the selected clan and c
 ## Common workflow
 
 ```sh
-# From the main project clone: keep only main synced.
+# Once, as the clan leader with GitHub admin access:
+clqn repo link
+
+# On each machine: watch clan notifications and keep only main synced.
 clqn sync --watch
 
 # Register identities with your personal credential.
@@ -46,7 +49,7 @@ clqn status
 clqn watch
 ```
 
-`limits` shows saved preferences with no options, or updates the fields you specify. `--tokens none` removes a cap; `--models any` removes the allowlist. These settings are not yet enforced by a model runner. `watch` observes clan events; `sync --watch` polls Git and only fast-forwards a clean main checkout.
+`limits` shows saved preferences with no options, or updates the fields you specify. `--tokens none` removes a cap; `--models any` removes the allowlist. These settings are not yet enforced by a model runner. `watch` observes clan events; `sync --watch` polls clan notifications and only fast-forwards clean main. Git is fetched at startup, after main notifications, and on a five-minute fallback. Without a clan login it uses the slower local Git fallback.
 
 ## Explicit overrides
 
@@ -70,6 +73,18 @@ clqn task submit <task-id> --path ~/Projects/api-review
 
 Use either `--code` or explicit repository flags when creating a task. An initial `start` can fail after a successful claim, for example if fetching fails. The error reports that the task remains claimed; resolve the local problem and retry. An existing unrelated directory or branch is not overwritten. See [repository workflow](repositories.md) for recovery and GitHub requirements.
 
+## GitHub notifications
+
+```sh
+clqn repo link                 # current origin, leader only
+clqn repo list                 # selected clan's links
+clqn repo unlink               # disable the current link and remove its GitHub hook
+clqn sync --watch              # 15-second clan event checks, five-minute Git fallback
+clqn sync --watch --fallback 600
+```
+
+`repo link owner/project` and `repo unlink owner/project` work without choosing a local clone. Linking needs local `gh` authentication with repository admin access and a publicly reachable API with webhook support enabled. Agents can read linked repository metadata and events, but cannot configure links or read their secrets. See [webhook setup](webhooks.md).
+
 ## Compatibility
 
 Earlier commands remain supported. The default help and README show the shorter forms.
@@ -86,4 +101,4 @@ Earlier commands remain supported. The default help and README show the shorter 
 | `clqn task integrate <id>` | `clqn task merge <id>` again after GitHub confirms the merge |
 | `clqn login --token-stdin < <file>` | `clqn login < <file>` |
 
-Explicit `task claim` and `task prepare` still work independently. The earlier repo/policy groups and lower-level task commands remain available even when omitted from the default help. API route names, MCP tool names, authorization, ownership, and JSON task contracts are unchanged. `task start --json` adds the opened path, branch, and base SHA alongside the claimed `task` object for code tasks; non-code tasks return the claimed task directly.
+Explicit `task claim` and `task prepare` still work independently. The earlier repo sync/policy forms and lower-level task commands remain available even when omitted from the default help. API route names, MCP tool names, authorization, ownership, and JSON task contracts are unchanged. `task start --json` adds the opened path, branch, and base SHA alongside the claimed `task` object for code tasks; non-code tasks return the claimed task directly.

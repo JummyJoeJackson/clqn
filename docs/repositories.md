@@ -27,22 +27,31 @@ Registration does not launch a model. Start your chosen agent using its existing
 
 ## Automatically sync only main
 
-Keep one checkout on `main` and run a foreground watcher on each participating machine:
+First the leader links the repository to the selected clan, using a local GitHub account with repository admin access:
 
 ```sh
-cd ~/Projects/project
+clqn repo link
+```
+
+The API must have [webhook support configured](webhooks.md#server-setup) and be publicly reachable over HTTPS. The command creates or updates a GitHub push webhook with a per-link secret. GitHub sends all branch pushes; the API records a clan event only for `refs/heads/main`. The server holds no GitHub access token.
+
+On each machine, log in to the clan, keep a checkout on `main`, and run:
+
+```sh
 clqn sync --watch
 ```
 
-The watcher fetches only `refs/heads/main` from origin every 15 seconds. It fast-forwards the selected local `main` checkout after confirming its origin and local state. It never fetches all branches, switches to main from another branch, pushes main, or updates task worktrees. The repository is inferred from `origin` and the checkout defaults to the current directory. Use `--path <directory>` to select another checkout or `--repo <owner/repo>` to check an explicit repository. The command uses local Git credentials and does not require a clan API login.
+The watcher polls the existing clan event endpoint every 15 seconds. It fetches only `origin/main` at startup, after matching `repository.main_changed` events, and at a five-minute safety fallback. Multiple matching events in a batch cause one fetch. Other repositories and task/activity events do not cause a Git fetch. It does not fetch all branches, switch to main, push main, or update task worktrees.
 
-Omit `--watch` to sync once. Use `--interval <seconds>` between 1 and 3600 to change the polling interval. `--json` emits one result per successful polling attempt, including skipped updates. Human output prints when the result changes. Results include `status` (`updated`, `unchanged`, or `skipped`), local and remote SHAs, and a `reason` when skipped.
+Origin and the checkout are inferred from the current directory. Use `--path <directory>` to select another checkout, `--repo <owner/repo>` to assert a repository, or `--clan <id>` to select another clan. `--interval <seconds>` controls clan event polling; `--fallback <seconds>` controls the Git safety check. Without a clan credential the watcher uses the five-minute local Git fallback. For compatibility, an explicitly supplied legacy `--interval` controls local Git polling when no credential is present and `--fallback` is omitted.
 
-A dirty checkout, in-progress Git operation, local-only commits, or divergent history prevents automatic updates. A checkout on a feature branch is left there; its local main is not advanced until the selected checkout is back on main. Ignored-file collisions fail rather than overwrite local contents. Resolve these conditions explicitly, then let the next poll retry. There is no autostash, rebase, merge commit, reset, or automatic conflict resolution.
+Omit `--watch` for a single local Git sync. `--json` emits one result per completed Git sync attempt, including skipped updates; idle API polls emit nothing. Human output prints when the result changes. Results include `status` (`updated`, `unchanged`, or `skipped`), local and remote SHAs, and a skip `reason`.
 
-Network or Git errors are reported to stderr. A watcher retries on the next interval; a one-shot command exits nonzero. A skipped sync returns a structured result without changing local files. Ctrl+C or SIGTERM stops the loop and cancels an active Git subprocess. The watcher runs only while the command is active; it is not installed as a background service or launched automatically with agent sessions.
+A dirty checkout, in-progress Git operation, local-only commits, or divergent history prevents automatic updates. Feature branches are left in place, and ignored-file collisions fail rather than overwrite local contents. After a skipped event-driven attempt, the next attempt is a later main notification, the safety fallback, or an explicit `clqn sync` after you resolve the local issue. There is no autostash, rebase, merge commit, reset, or automatic conflict resolution.
 
-Syncing main does not update task base SHAs, mark tasks integrated, or complete tasks. Keep task branches isolated. After syncing, use the current main commit as the base for dependent work.
+API and Git failures are reported to stderr and retry with bounded backoff. The slow Git fallback continues even if the API is unavailable. A failed event-triggered Git sync keeps the event pending for a later retry. Ctrl+C or SIGTERM cancels polling and active requests. The watcher runs only while the foreground command is active.
+
+Syncing main does not update task base SHAs, mark integration, or complete tasks. Use the latest main commit as the base for dependent work. See [webhook setup and recovery](webhooks.md).
 
 ## Create and assign a task
 
@@ -133,7 +142,7 @@ Before delegating a dependent task, sync main and record its new SHA. Keep indep
 
 ## Events and the trust boundary
 
-Use `clqn watch` to observe `task.assigned`, `task.unassigned`, `task.repository_updated`, and `task.integrated`. Workers report pushes; orchestrators check PR status. There is no GitHub webhook receiver or automatic PR integration reporter. `sync --watch` observes upstream main changes through Git polling and updates only local main. It does not report arbitrary pushes or merges to the API. The task CLI publishes, checks, and records integration on demand; `clqn watch` polls the clan event log.
+Use `clqn watch` to observe `task.assigned`, `task.unassigned`, `task.repository_updated`, `task.integrated`, and `repository.main_changed`. Signed GitHub webhooks notify the API about main pushes. Local watchers poll those events and fetch Git only when needed, plus startup and fallback checks. Webhooks do not report arbitrary task-branch progress or mark PRs integrated; task commands still verify and record PR results.
 
 API repository and integration endpoints store authenticated reports. The server does not hold GitHub credentials or verify a reported SHA with GitHub. `submit` and `merge` perform local Git/GitHub verification before reporting. Direct API and MCP callers must perform that verification themselves. A leader-appointed orchestrator is trusted to make integration reports.
 

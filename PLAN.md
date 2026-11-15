@@ -101,7 +101,10 @@ clqn task merge <id>
 clqn task release <id>
 clqn task done <id>
 
-# Local main synchronization
+# GitHub notifications and local main synchronization
+clqn repo link
+clqn repo list
+clqn repo unlink
 clqn sync --watch
 
 # Activity and metrics
@@ -155,6 +158,8 @@ context_revisions
 tasks
 events
 invitations
+linked_repositories
+github_deliveries
 ```
 
 Important properties:
@@ -191,11 +196,11 @@ Implement:
 
 **Repository coordination slice:** Implemented a permanent designated orchestrator role, worker assignments and compare-and-clear unassignment, task repository/base SHA/branch references, isolated local worktree preparation, non-force publication, exact-head PR checks and squash merge, confirmed integration reports, and ownership-gated completion. API and MCP remain adapters around server-side authorization; Git and `gh` operate locally. See [repository workflow](docs/repositories.md).
 
-**Main-only automatic sync:** Implemented `clqn sync --watch` as a local foreground polling command. Fetch only `origin/main`, and fast-forward only the selected clean main checkout. Skip dirty, diverged, locally ahead, or non-main checkouts; never automatically update task branches/worktrees. Polling errors retry. Sync does not launch agents or update task integration records.
+**Main-only automatic sync:** Implemented signed GitHub push webhooks bound to repository/clan links. `clqn repo link` uses the leader's local `gh` account to configure the per-link secret. `clqn sync --watch` polls clan events every 15 seconds, fetches Git at startup and after matching main notifications, and keeps a five-minute fallback for missed deliveries or offline clients. Only clean main can fast-forward; task branches stay pinned. HMAC validation, delivery replay suppression, and atomic audit events stay server-side. No queue, SSE, or hosted worker is needed. See [webhook setup](docs/webhooks.md).
 
 **Simple CLI:** Infer the repository and checkout from the current directory. `task add --code` records the latest origin/main and chooses a unique branch; `task start` claims work and chooses or resumes a task worktree; `task submit` uses the current worktree; `task done` completes it. Use `agent add <name>` and `limits --tokens <number>`. Older names remain compatible, with explicit overrides documented in the [command reference](docs/commands.md). API and MCP contracts stay unchanged.
 
-**Execution boundary:** Registration does not launch or keep model processes running. Existing agent runtimes invoke these tools. Member token/model/control policies are persisted, but hard usage enforcement and execution approvals still need metering and a runner. DMs/group chats, unattended scheduling, automatic webhook ingestion, and conflict resolution are not implemented.
+**Execution boundary:** Registration does not launch or keep model processes running. Existing agent runtimes invoke these tools. Member token/model/control policies are persisted, but hard usage enforcement and execution approvals still need metering and a runner. DMs/group chats, unattended scheduling, and automatic conflict resolution are not implemented. GitHub hook configuration and provider delivery still need live deployment validation; automated acceptance uses signed HTTP deliveries and a local GitHub CLI fixture.
 
 **Remaining validation:** Deploy the API and managed PostgreSQL on GCP, then run the acceptance workflow on separate machines with real Codex and Claude Code applications. These operator-run checks have not been performed; the automated protocol clients do not establish real application configuration or deployed networking. Resolve any friction from that check before choosing post-MVP features.
 
@@ -208,7 +213,7 @@ Implement:
 - **Agents:** Register workers under their human owners and one designated orchestrator under the clan leader. Use clan-scoped credentials. The orchestrator may assign/unassign tasks and record integrations, but cannot invite members, create agents, change member policies, or complete another actor's task. No heartbeat or model launcher.
 - **Context:** Store text by key with immutable numbered revisions. Require the expected revision on updates and return a conflict for stale writes. No branching, merging, embeddings, or automatic conflict resolution.
 - **Tasks:** Keep open, claimed, and completed states. Serialize assignment, claims, repository reports, and integration with row locks. Only the assigned agent can claim an assigned task; only its exact owner can report code or complete it. Repository tasks must have a recorded merge before completion. Owner release or human leader reset clears assignment. No leases or dependency scheduler.
-- **Events:** Append audit rows in the same transaction as state changes. List them with bounded cursor pagination. `watch` polls this endpoint at a modest interval; no SSE or pub/sub service unless polling proves inadequate.
+- **Events:** Validate raw GitHub webhook signatures and bind repository slugs to clans before recording main-change notifications. Suppress duplicate deliveries transactionally. Append audit rows in the same transaction as state changes. List them with bounded cursor pagination. `watch` polls this endpoint at a modest interval; no SSE or pub/sub service unless polling proves inadequate.
 - **Status and stats:** Show members, registered agents, task counts, and recent activity using ordinary queries. Defer time-series storage, dashboards, presence tracking, and configurable analytics.
 - **Deployment:** Run one API service and managed PostgreSQL. Keep migrations explicit and credentials server-side. No multi-region architecture or shared execution environment.
 
