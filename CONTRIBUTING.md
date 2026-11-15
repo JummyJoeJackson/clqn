@@ -44,7 +44,7 @@ npm run typecheck
 
 `npm test` builds all workspaces and runs Node's built-in test runner. Tests cover HTTP contracts, CLI JSON and failure behavior, MCP discovery and invocation, and a real stdio-to-HTTP flow. Default tests require local loopback access but no database. PostgreSQL integration tests are skipped unless `TEST_DATABASE_URL` is set to a dedicated test database; CI supplies PostgreSQL and runs all checks on Node 22 and 24. See [database setup](docs/database.md).
 
-Authorization, credential revocation, and concurrent clan creation are covered. Add concurrent context write and task ownership tests as those features are implemented. For documentation-only changes, check formatting and relative links.
+Checks cover authorization, credential revocation, concurrent clan/context/task/policy writes, orchestrator registration, assignment ownership, and integration gating. Repository acceptance uses real HTTP, PostgreSQL, CLI, local Git branches/pushes, and a fake `gh` that performs a local squash merge. It verifies that a dependent task starts from integrated main and that personal dirty files are preserved. Live GitHub permissions, CI, protected branches, merge queues, and real agent runtimes still require operator acceptance. Local Git helper tests use temporary repositories and fake GitHub responses without network access. For documentation-only changes, check formatting and relative links.
 
 The current Drizzle Kit dependency tree reports four moderate development-only audit findings through its legacy esbuild loader. Production dependencies use patched releases. Avoid running Drizzle's development tooling as a public server; revisit the loader dependency when upgrading Drizzle Kit.
 

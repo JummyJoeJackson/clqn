@@ -11,16 +11,25 @@ A lightweight, CLI-first tool for humans and their AI agents to collaborate in s
 
 ## How clans work
 
-A **clan** is a private workspace for one project. It stores shared text, tasks, and a record of changes.
+A **clan** is a private project workspace. It stores shared text, tasks, agent registrations, and a record of changes.
 
 1. Create a clan. You become its **leader**.
-2. Invite other people. They join as **members** with their own accounts.
-3. clqn spawns an orchestrator agent under the the leader. It intelligently delegates tasks to the other agents.
-4. Register agents. Each member's agent belongs to them and runs on their machines.
-5. Store project information as shared context. clqn handles reading and updating this context.
-6. Create tasks. clqn ensures tasks are done in order without work conflicts.
-7. Send direct messages (DMs) to other people or agents. Create group chats for work that needs several participants.
+2. Invite other people. They join with their own accounts and register their agents.
+3. Register one **orchestrator** under the leader. It assigns tasks and coordinates integration through the CLI or MCP.
+4. Give each coding task a repository, starting commit, and branch. The worker claims the task and prepares a separate local worktree.
+5. The worker commits its changes, pushes its branch, and reports a pull request. The orchestrator checks and merges the result.
+6. Start dependent tasks from the merged code. Shared context keeps decisions available across agent sessions.
 
+The orchestrator is a permanent role in the collaboration model. Register your chosen agent in that role; clqn does not launch a model process or keep it running. Agents use their existing local tools and permissions. Direct messages and group chats remain planned features.
+
+## Features
+
+- **Shared context:** Read and update text by key, with revision checks and history.
+- **Task ownership:** Assign work to an agent. Only its claimant can complete it.
+- **Repository coordination:** Prepare isolated worktrees at known commits. Publish PRs and record confirmed integration.
+- **Activity:** Watch assignments, published results, and integrations from the terminal.
+- **Member policies:** Save token caps, model allowlists, and leader control preferences. Runtime enforcement is not yet available.
+- **CLI and MCP:** Use terminal commands or agent tools. Add `--json` for scripts.
 
 ## Installation
 
@@ -105,24 +114,52 @@ clqn context list --json
 
 If another person or agent updated the entry first, the write fails with a conflict. Read the latest revision before you try again.
 
-### 5. Claim and complete a task
+### 5. Coordinate code changes
 
-Alice creates a task:
+Install Git and the GitHub CLI (`gh`) on each machine that works with code. Authenticate each machine with GitHub. Each local clone must have an `origin` that points to the task's GitHub repository.
+
+As the leader, register your chosen orchestrator once:
 
 ```sh
-clqn task add "Review the API contract"
+clqn agent connect --name Coordinator --orchestrator --json
 ```
 
-Bob lists tasks and copies the task ID from the output. He uses that ID to claim and complete the task:
+Keep its returned token private and configure it in the orchestrator's environment. Register workers with `clqn agent connect --name Codex --json`. These commands register identities; they do not start agent processes.
+
+In the orchestrator's session, create a task with the full starting commit SHA and a unique branch. Then assign it to a registered worker:
 
 ```sh
-clqn task list
+clqn task add "Review the API contract" --repo owner/project \
+  --base-sha <full-commit-sha> --branch clqn/api-contract
+clqn task assign <task-id> --agent <worker-agent-id>
+```
+
+In the worker's session, use its own agent token to claim the task and prepare a worktree:
+
+```sh
 clqn task claim <task-id>
-# Do the work, then mark it complete.
-clqn task complete <task-id>
+clqn task prepare <task-id> --repo-path ~/Projects/project \
+  --path ~/Projects/project-api-contract
 ```
 
-A task moves from `open` to `claimed` to `completed`. To return a claimed task to `open`, its owner or the human clan leader uses `task release <task-id>`.
+The command fetches the base branch and creates a separate directory at the recorded commit. It leaves the existing checkout, including uncommitted work, in place. Do the work, install dependencies as needed, run tests, and commit in that task directory. Then publish:
+
+```sh
+clqn task publish <task-id> --path ~/Projects/project-api-contract
+```
+
+The worker pushes without force, creates or reuses the matching PR, and reports its head commit to the clan. In the orchestrator's session:
+
+```sh
+clqn task check <task-id>
+clqn task merge <task-id>
+```
+
+`merge` requires passing checks, matches the recorded PR head, and respects GitHub protections. It records integration only after GitHub confirms a merge. If a merge queue is still processing, run `clqn task integrate <task-id>` after it finishes.
+
+The worker can then run `clqn task complete <task-id>`. A repository task cannot complete before integration is recorded. Fetch the updated base branch before creating dependent tasks. Existing task worktrees stay on their own branches; clqn does not pull changes into everyone's working directories.
+
+For a task without code changes, use `clqn task add "Review the release notes"`, then claim and complete it without repository commands. See the [repository workflow](docs/repositories.md) for recovery, permissions, and current limits.
 
 ### 6. Check progress
 
@@ -187,10 +224,12 @@ Choose a leader control level:
 - `approve`: The leader can request work. You must approve each request before it starts.
 - `automatic`: The leader can request work without approval for each request, within your token and model limits.
 
-Leaders cannot change another member's policy.
+Leaders cannot change another member's policy. These settings are saved preferences; token metering, execution approvals, and automatic agent launching are not implemented. They do not currently enforce model or usage limits. See [agent policies](docs/policies.md).
 
 ## Documentation
 
+- [Repository workflow and orchestrator](docs/repositories.md)
+- [Agent policies](docs/policies.md)
 - [Project architecture and roadmap](PLAN.md)
 - [GCP hosting](docs/hosting.md)
 - [Database setup and migrations](docs/database.md)

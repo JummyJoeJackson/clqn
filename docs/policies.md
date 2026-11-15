@@ -4,7 +4,7 @@ Each human member can save one policy per clan. It applies to all of that member
 
 ## Current behavior
 
-Policies are saved preferences. There is no runner, model gateway, usage meter, or execution approval flow yet. Policies do not currently stop model calls or grant execution access. CLI output and API responses report `enforcement: "unavailable"`.
+Policies are saved preferences. There is no runner, model gateway, usage meter, or execution approval flow yet. Policies do not currently stop model calls or grant execution access. Repository commands can prepare worktrees and publish code using local Git/GitHub permissions, but do not launch model processes or enforce these saved limits. CLI output and API responses report `enforcement: "unavailable"`.
 
 Existing clan and task permissions stay in effect. For example, a leader can still release a claimed task. A saved control level does not change task ownership rules.
 

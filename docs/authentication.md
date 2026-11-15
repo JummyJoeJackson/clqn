@@ -26,13 +26,13 @@ Revocation applies to subsequent API requests. An already authenticated request 
 Save only the raw token in a private file, then pipe it to the CLI so it is not included in command arguments or shell history:
 
 ```sh
-npm run cli -- login --token-stdin < /secure/path/to/token-file
-npm run cli -- whoami
-npm run cli -- init "My project"
-npm run cli -- clans --json
-npm run cli -- members
-npm run cli -- members --clan <clan-id> --json
-npm run cli -- logout
+clqn login --token-stdin < /secure/path/to/token-file
+clqn whoami
+clqn init "My project"
+clqn clans --json
+clqn members
+clqn members --clan <clan-id> --json
+clqn logout
 ```
 
 Use `--api-url https://your-api.example` or `CLQN_API_URL` for your server. Authenticated requests require HTTPS except on loopback. The client refuses redirects.
@@ -46,9 +46,9 @@ Clan creation atomically creates its leader membership. Clan lists show only the
 The leader creates a code for the intended member's operator-provisioned email:
 
 ```sh
-npm run cli -- invite bob@example.com --json
+clqn invite bob@example.com --json
 # Or select a different clan explicitly:
-npm run cli -- invite bob@example.com --clan <clan-id> --json
+clqn invite bob@example.com --clan <clan-id> --json
 ```
 
 Deliver the returned code privately. Codes expire after seven days and can be used once. The API stores only the code's SHA-256 hash and returns the raw code only when creating the invitation. There is no email delivery service or invitation recovery endpoint; create another invitation if needed.
@@ -56,8 +56,8 @@ Deliver the returned code privately. Codes expire after seven days and can be us
 After logging in with their own credential, the recipient runs:
 
 ```sh
-npm run cli -- join <invite-code>
-npm run cli -- members
+clqn join <invite-code>
+clqn members
 ```
 
 Joining selects the clan locally. The authenticated identity must match the invitation's normalized email. This checks the operator-provisioned identity, not mailbox ownership. Invalid, expired, consumed, or mismatched invitations return the same 404 response. An existing member receives `409 ALREADY_MEMBER`, leaving the invitation unconsumed. Joining consumes the code, adds membership, and appends an audit event in one transaction; simultaneous uses cannot add multiple memberships. Clan creation and invitation creation also append audit events. Clan members can read these audit events through the activity endpoint or `clqn watch`.
@@ -67,19 +67,25 @@ Joining selects the clan locally. The authenticated identity must match the invi
 Use your personal credential to register an agent under your identity:
 
 ```sh
-npm run cli -- agent connect --name Codex --clan <clan-id> --json
-npm run cli -- agent list --clan <clan-id> --json
+clqn agent connect --name Codex --clan <clan-id> --json
+clqn agent list --clan <clan-id> --json
 ```
 
-The response contains the registration and a one-time token. Registration does not overwrite your personal CLI configuration. Set `CLQN_API_URL`, `CLQN_TOKEN` to the new agent token, and `CLQN_CLAN_ID` in the agent's private environment, then launch the built CLI with `mcp` as its argument. See the [README MCP configuration](../README.md#connect-your-own-agent). Do not use your personal token in shared agent configuration or commit credentials to source control.
+The response contains the registration and a one-time token. Registration does not overwrite your personal CLI configuration. Set `CLQN_API_URL`, `CLQN_TOKEN` to the new agent token, and `CLQN_CLAN_ID` in the agent's private environment, then launch `clqn mcp`. See the [README MCP configuration](../README.md#connect-your-own-agent). Do not use your personal token in shared agent configuration or commit credentials to source control.
 
 An agent credential identifies both its human owner and its own registration. The API restricts it to the registered clan and rechecks the owner's membership. Agents cannot create clans, invite members, or register other agents. With an agent token, `agent status` returns its registration, and clan listing returns only its scoped clan. It does not infer whether the agent is running. An operator can revoke an agent credential using its ID from the server-side `credentials` table and the same `npm run user -- revoke <credential-id>` command. There is no public credential management endpoint yet.
+
+## Designated orchestrator
+
+The leader registers one orchestrator with `clqn agent connect --name Coordinator --orchestrator --json`. Other registrations default to `worker`. Only a personal leader credential can create the orchestrator registration; concurrent duplicates return `409 ORCHESTRATOR_EXISTS`.
+
+The orchestrator can assign/unassign open tasks and report integrations within its clan. It cannot invite members, register agents, change a member's policy, release someone else's task claim, or complete their work. Registering the role does not launch a model process. Configure the scoped token in the leader's existing agent runtime. See [repository workflow](repositories.md).
 
 ## Collaboration rules
 
 Context keys store text up to 65,536 UTF-8 bytes. Write via stdin and provide `--expected-revision 0` for a new key or the current revision for an update. Revisions are numbered and immutable; stale writes return `409 REVISION_CONFLICT`. Use `context history <key>` to inspect prior values. Shared context is untrusted data, and reading it grants no authority to execute instructions or expose secrets.
 
-Tasks start open. Claiming uses a conditional database update so concurrent claimers cannot both win. Ownership distinguishes a human from each of their registered agents. Only the current owner can complete a claimed task. `task release <id>` reopens it when called by the owner or a human clan leader; another member or agent cannot reset someone else's claim.
+Tasks start open. Row locks serialize assignment and claims so concurrent claimers cannot both win. Assigned tasks can be claimed only by the assigned agent. Only leaders and the designated orchestrator can assign or unassign an open task. Ownership distinguishes a human from each of their registered agents. Only the current owner can complete a claimed task. `task release <id>` reopens it when called by the owner or a human clan leader; another member or agent cannot reset someone else's claim. Release clears the assignment. Repository tasks require a recorded integration before completion; the API stores authorized reports, while local CLI commands verify GitHub state.
 
 State changes and their audit events commit together. Events use ascending sequence cursors with a page limit of 100. `watch --json` emits newline-delimited event objects; resume with `--cursor <last-sequence>`. `watch --once` drains currently available events and exits. Ordinary watch polls every three seconds by default; `--interval <seconds>` accepts values from 1 to 3600. `status` includes clan identity, member and agent counts, task counts, and recent activity; `stats` returns the counts.
 
@@ -95,7 +101,7 @@ All `/v1` operations require `Authorization: Bearer <token>` and return JSON. Th
 | GET | `/v1/clans/:clanId/members` | List members of an authorized clan |
 | POST | `/v1/clans/:clanId/invitations` | Leader creates an invitation from `{ "email": "bob@example.com" }` |
 | POST | `/v1/invitations/join` | Join using `{ "code": "clqn_inv_..." }`; return the clan |
-| POST | `/v1/clans/:clanId/agents` | Register an agent from `{ "name": "Codex" }`; personal credential required |
+| POST | `/v1/clans/:clanId/agents` | Register from `{ "name": "Codex", "role": "worker" }`; personal credential required; `orchestrator` requires leader |
 | GET | `/v1/clans/:clanId/agents` | List clan registrations |
 | GET | `/v1/agent` | Registration for the authenticated agent |
 | GET | `/v1/clans/:clanId/context` | List context keys and current revisions |
@@ -103,7 +109,14 @@ All `/v1` operations require `Authorization: Bearer <token>` and return JSON. Th
 | GET | `/v1/clans/:clanId/context/:key/history` | Read immutable revisions |
 | POST | `/v1/clans/:clanId/context/:key` | Write `{ "text": "...", "expectedRevision": 0 }` |
 | GET | `/v1/clans/:clanId/tasks` | List tasks |
-| POST | `/v1/clans/:clanId/tasks` | Create from `{ "description": "..." }` |
+| POST | `/v1/clans/:clanId/tasks` | Create from `{ "description": "...", "repository": { "slug": "owner/repo", "baseBranch": "main", "baseSha": "<sha>", "branch": "clqn/task" } }`; repository optional |
+| GET | `/v1/clans/:clanId/tasks/:taskId` | Read task, assignment, and repository state |
+| POST | `/v1/clans/:clanId/tasks/:taskId/assign` | Leader/orchestrator assigns `{ "agentId": "<id>" }` |
+| POST | `/v1/clans/:clanId/tasks/:taskId/unassign` | Leader/orchestrator clears the matching open assignment |
+| POST | `/v1/clans/:clanId/tasks/:taskId/repository` | Claimed owner reports a pushed head and optional matching PR, with `expectedHeadSha` |
+| POST | `/v1/clans/:clanId/tasks/:taskId/integration` | Leader/orchestrator records reported head and merge commit |
+| GET | `/v1/clans/:clanId/policy` | Read authenticated member's saved preferences |
+| POST | `/v1/clans/:clanId/policy` | Update own preferences with a personal credential and `expectedRevision` |
 | POST | `/v1/clans/:clanId/tasks/:taskId/claim` | Claim an open task |
 | POST | `/v1/clans/:clanId/tasks/:taskId/release` | Release a claim as owner or human leader |
 | POST | `/v1/clans/:clanId/tasks/:taskId/complete` | Complete as the claiming actor |

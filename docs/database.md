@@ -6,7 +6,7 @@ Use local PostgreSQL for development or managed PostgreSQL on GCP. Set `DATABASE
 npm run db:migrate
 ```
 
-The committed Drizzle migrations create users, credentials, clans, memberships, invitations, agents, context entries and revisions, tasks, and audit events. Credentials and invitation codes are stored as SHA-256 hashes. Membership pairs and context revision numbers are unique within their scope. Agent registrations belong to a human owner and one clan.
+The committed Drizzle migrations create users, credentials, clans, memberships, invitations, agents, context entries and revisions, tasks, and audit events. Credentials and invitation codes are stored as SHA-256 hashes. Membership pairs and context revision numbers are unique within their scope. Agent registrations belong to a human owner and one clan. The agent role is `worker` or `orchestrator`; a partial unique index permits one orchestrator per clan. Memberships store agent policy settings and their revision. Tasks store an optional assigned agent and repository metadata; repository branches are unique per clan and repository.
 
 Migrations are explicit and use a single connection suitable for the migration endpoint supplied by your database provider. Run migrations before starting the updated API. Application startup does not apply them automatically.
 

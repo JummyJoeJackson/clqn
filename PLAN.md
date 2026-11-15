@@ -6,7 +6,7 @@
 
 Users bring their own agents (Codex, Claude Code, Cursor, custom agents, etc.) and connect them to a shared cloud workspace called a **clan**.
 
-The MVP lets agents share persistent context and coordinate tasks across users and machines. Additional capabilities follow demonstrated collaboration needs.
+Each clan uses a leader-owned orchestrator to delegate work to members' agents and coordinate Git integration. Workers run locally in isolated task worktrees. The API stores shared context, task ownership, repository references, and activity; GitHub remains the code source of truth.
 
 **Tagline:** Your agents. My agents. One workspace.
 
@@ -17,7 +17,7 @@ The MVP lets agents share persistent context and coordinate tasks across users a
 3. **Lightweight:** Minimal setup, dependencies, and infrastructure.
 4. **Human-controlled:** Users retain control over their agents, permissions, and resources.
 5. **Persistent collaboration:** Shared knowledge and project progress survive individual agent sessions.
-6. **Focused scope:** Ship shared context and task coordination before considering optional extensions.
+6. **Focused scope:** Ship orchestrator-led task coordination and Git integration in small working slices. Keep execution local and defer shared compute.
 7. **Open source:** Extensible architecture with clear APIs.
 
 ## Architecture
@@ -34,7 +34,7 @@ Human A + Agent A                  Human B + Agent B
               One PostgreSQL database
 ```
 
-CLI commands and local MCP tools call the same HTTP API. The API owns authentication, clan authorization, and collaboration state. Existing agent tools handle reasoning and execution on their users' machines.
+CLI commands and local MCP tools call the same HTTP API. The API owns authentication, clan authorization, and collaboration state. Existing agent tools handle reasoning and execution on their users' machines. The designated orchestrator assigns work through the API. Local CLI commands prepare worktrees, push task branches, and verify GitHub PRs with `gh`; no model framework or hosted execution service is required.
 
 ### MVP Tech Stack
 
@@ -52,7 +52,8 @@ Use ordinary database queries and transactions. The MVP needs no queue, cache se
 
 - **Clan:** Shared collaborative workspace associated with a project.
 - **Member:** Human user belonging to a clan.
-- **Agent:** AI assistant registered by a member.
+- **Agent:** AI assistant registered by a member, with a worker or orchestrator role.
+- **Orchestrator:** One leader-owned registration per clan that can assign work and record integration. Its model process runs in the leader's existing agent runtime.
 - **Context:** Shared, versioned knowledge accessible to authorized agents.
 - **Task:** Unit of work that a human or agent can create, claim, and complete.
 - **Event:** Auditable record of actions and state changes.
@@ -76,7 +77,8 @@ clqn members
 clqn status
 
 # Agent integration
-clqn agent connect
+clqn agent connect --name Codex
+clqn agent connect --name Coordinator --orchestrator
 clqn agent list
 clqn agent status
 
@@ -89,6 +91,14 @@ clqn context history <key>
 # Task coordination
 clqn task add "<description>"
 clqn task list
+clqn task show <id>
+clqn task assign <id> --agent <id>
+clqn task unassign <id> --agent <id>
+clqn task prepare <id> --repo-path <clone> --path <new-worktree>
+clqn task publish <id> --path <worktree>
+clqn task check <id>
+clqn task merge <id>
+clqn task integrate <id>
 clqn task claim <id>
 clqn task release <id>
 clqn task complete <id>
@@ -115,6 +125,12 @@ clqn_claim_task
 clqn_complete_task
 clqn_list_tasks
 clqn_get_status
+clqn_get_task
+clqn_assign_task
+clqn_unassign_task
+clqn_report_task_repository
+clqn_record_task_integration
+clqn_get_policy
 ```
 
 An agent should be able to join an existing workflow without changing its underlying model or framework.
@@ -145,7 +161,9 @@ Important properties:
 - All clan resources are scoped by clan ID.
 - Every operation has an authenticated actor.
 - Context revisions are immutable.
-- Tasks track ownership, status, and timestamps.
+- Tasks track ownership, assignment, status, timestamps, and optional repository/base/branch/PR/merge metadata.
+- Repository tasks require recorded integration before completion.
+- GitHub verification runs locally; the API stores authenticated reports rather than GitHub credentials.
 - Events provide an append-only audit trail.
 - Authorization is enforced server-side.
 
@@ -170,6 +188,10 @@ Implement:
 
 **Current slice:** The initial MVP implementation is complete: personal and clan-scoped agent credentials, private clans and invitations, versioned shared context, task ownership and release, transactional audit events, status/stats, polling watch, and local stdio MCP tools. Automated acceptance exercises two users and two MCP clients through the real HTTP API and PostgreSQL. The production container and explicit migration entrypoint are verified locally. See [authentication setup](docs/authentication.md) and [GCP deployment](docs/hosting.md).
 
+**Repository coordination slice:** Implemented a permanent designated orchestrator role, worker assignments and compare-and-clear unassignment, task repository/base SHA/branch references, isolated local worktree preparation, non-force publication, exact-head PR checks and squash merge, confirmed integration reports, and ownership-gated completion. API and MCP remain adapters around server-side authorization; Git and `gh` operate locally. See [repository workflow](docs/repositories.md).
+
+**Execution boundary:** Registration does not launch or keep model processes running. Existing agent runtimes invoke these tools. Member token/model/control policies are persisted, but hard usage enforcement and execution approvals still need metering and a runner. DMs/group chats, unattended scheduling, automatic webhook ingestion, and conflict resolution are not implemented.
+
 **Remaining validation:** Deploy the API and managed PostgreSQL on GCP, then run the acceptance workflow on separate machines with real Codex and Claude Code applications. These operator-run checks have not been performed; the automated protocol clients do not establish real application configuration or deployed networking. Resolve any friction from that check before choosing post-MVP features.
 
 **Acceptance test:** Alice uses Codex and Bob uses Claude Code on separate machines. Both connect to the same clan, read/write shared context, coordinate tasks, and observe each other's progress.
@@ -178,9 +200,9 @@ Implement:
 
 - **Authentication:** Keep the current operator-provisioned personal tokens for the first collaboration test. Add scoped agent credentials with registration. Public signup, identity-provider integration, and automated credential rotation are separate decisions.
 - **Invitations:** A leader creates an expiring, single-use invite code bound to the intended email identity; the inviter delivers it manually. Joining requires an authenticated user with that identity. Consume the invitation and add membership in one transaction. No email-delivery service is required. Operator-provisioned email labels are not proof of mailbox ownership.
-- **Agents:** Register an agent under its human owner with a credential restricted to one clan. Start with a name and identity; no capability negotiation, heartbeat service, or agent scheduler.
+- **Agents:** Register workers under their human owners and one designated orchestrator under the clan leader. Use clan-scoped credentials. The orchestrator may assign/unassign tasks and record integrations, but cannot invite members, create agents, change member policies, or complete another actor's task. No heartbeat or model launcher.
 - **Context:** Store text by key with immutable numbered revisions. Require the expected revision on updates and return a conflict for stale writes. No branching, merging, embeddings, or automatic conflict resolution.
-- **Tasks:** Start with open, claimed, and completed states. Claim with one conditional database update; only the owning actor can complete a claimed task. Provide an explicit owner release or leader reset for abandoned claims. No leases, renewal timers, automatic reassignment, or delegation engine.
+- **Tasks:** Keep open, claimed, and completed states. Serialize assignment, claims, repository reports, and integration with row locks. Only the assigned agent can claim an assigned task; only its exact owner can report code or complete it. Repository tasks must have a recorded merge before completion. Owner release or human leader reset clears assignment. No leases or dependency scheduler.
 - **Events:** Append audit rows in the same transaction as state changes. List them with bounded cursor pagination. `watch` polls this endpoint at a modest interval; no SSE or pub/sub service unless polling proves inadequate.
 - **Status and stats:** Show members, registered agents, task counts, and recent activity using ordinary queries. Defer time-series storage, dashboards, presence tracking, and configurable analytics.
 - **Deployment:** Run one API service and managed PostgreSQL. Keep migrations explicit and credentials server-side. No multi-region architecture or shared execution environment.
@@ -192,13 +214,13 @@ Keep authorization, atomic writes, revision conflict checks, and task ownership 
 Choose the next small feature from actual usage after the two-person acceptance test. These are candidates, not committed release requirements:
 
 - Asynchronous messages, if shared context and tasks leave a communication gap.
-- Explicit task assignment and handoff, if claiming and releasing tasks are insufficient.
+- Task dependency scheduling and safe worktree refresh at explicit checkpoints, if real coordination requires them.
 - Activity filters or SSE, if basic counts and polling fail a demonstrated need.
 - Task leases or capability profiles, only if real unattended workflows require them.
 
 ### Uncommitted Future Ideas
 
-Optional coordination, context branching, agent interoperability protocols, artifact storage, and distributed compute are outside the implementation plan. They require a separate proposal with a concrete use case, costs, and security boundaries before work begins. Do not choose orchestration frameworks or build supporting abstractions in advance.
+Group chats, context branching, agent interoperability protocols, artifact storage, and distributed compute require separate proposals. The orchestrator role and Git coordination are core product direction. Build on existing agent runtimes; choose a new orchestration framework only for a concrete unmet execution requirement.
 
 Shared compute in particular is a separate product-sized effort, not a prerequisite for a stable release of the collaboration tool. Never expose members' private API keys or execute arbitrary remote code on host machines without explicit authorization and isolation.
 
@@ -235,7 +257,7 @@ All product functionality remains CLI-accessible.
 - Replacing Codex, Claude Code, or Cursor.
 - Creating a graphical project management application.
 - Replacing Git/GitHub for source control.
-- Requiring a central orchestrator for collaboration.
+- Hosting users' model execution or replacing their existing agent runtimes.
 - Building a distributed compute marketplace in the MVP.
 - Adding complex agent autonomy before basic collaboration works.
 
