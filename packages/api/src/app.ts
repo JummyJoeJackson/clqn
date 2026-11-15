@@ -1,3 +1,4 @@
+import { createRepositoryRoutes, createGithubWebhookRoutes } from './repositories.js';
 import { createContextRoutes } from './context.js';
 import { createPolicyRoutes } from './policy.js';
 import { createTaskRoutes } from './tasks.js';
@@ -10,10 +11,14 @@ import { VERSION, healthSchema, createClanSchema, createInvitationSchema, joinIn
 import { requirePersonal } from './access.js';
 import { hashToken, type WorkspaceStore } from './store.js';
 
-export function createApp(store?: WorkspaceStore, db?: WorkspaceDb) {
+export function createApp(store?: WorkspaceStore, db?: WorkspaceDb, options: { githubWebhookSecret?: string | undefined } = {}) {
+  if (options.githubWebhookSecret !== undefined && options.githubWebhookSecret.trim().length < 32) {
+    throw new Error('GITHUB_WEBHOOK_SECRET must contain at least 32 non-padding characters');
+  }
   const app = new Hono<{ Variables: { user: Actor } }>();
   // Liveness only: this endpoint intentionally does not connect to the database.
   app.get('/health', (c) => c.json(healthSchema.parse({ status: 'ok', service: 'clqn-api', version: VERSION })));
+  app.route('/hooks/github', createGithubWebhookRoutes(db, options.githubWebhookSecret));
   app.use('/v1/*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
     const header = c.req.header('authorization');
@@ -88,6 +93,7 @@ export function createApp(store?: WorkspaceStore, db?: WorkspaceDb) {
     return c.json({ members });
   });
   if (db) {
+    app.route('/v1/clans/:clanId/repositories', createRepositoryRoutes(db, options.githubWebhookSecret));
     app.route('/v1/clans/:clanId/policy', createPolicyRoutes(db));
     app.route('/v1/clans/:clanId/context', createContextRoutes(db));
     app.route('/v1/clans/:clanId/tasks', createTaskRoutes(db));
@@ -95,8 +101,8 @@ export function createApp(store?: WorkspaceStore, db?: WorkspaceDb) {
   }
   app.notFound((c) => c.json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }, 404));
   app.onError((error, c) => {
-    if (error instanceof ApiError && [400, 403, 404, 409].includes(error.status)) {
-      return c.json({ error: { code: error.code, message: error.message } }, error.status as 400 | 403 | 404 | 409);
+    if (error instanceof ApiError && [400, 403, 404, 409, 503].includes(error.status)) {
+      return c.json({ error: { code: error.code, message: error.message } }, error.status as 400 | 403 | 404 | 409 | 503);
     }
     // Database errors may contain SQL parameters. Never log request credentials or user data.
     console.error('API request failed', { name: error.name });

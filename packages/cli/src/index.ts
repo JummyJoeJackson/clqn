@@ -3,6 +3,8 @@ import { Command } from 'commander';
 import { ApiError, ClqnClient, VERSION, updatePolicySchema, type UpdatePolicy, registerAgentSchema, repositoryInputSchema, repositorySlugSchema, type Task } from '@clqn/shared';
 import { serveMcp } from '@clqn/mcp';
 import { readConfig, removeConfig, writeConfig } from './config.js';
+import { runSyncWatch } from './sync-watch.js';
+import { configureGithubWebhook, removeGithubWebhook } from './github-hooks.js';
 import { prepareWorktree, publishWorktree, inspectPullRequest, mergePullRequest, syncMain, localRepository, repositoryForNewTask, taskWorktreeLocation, openTaskWorktree } from './git.js';
 
 const program = new Command()
@@ -21,52 +23,114 @@ program.command('health').description('Check API liveness (not clan status or da
   output(health, `${health.service} ${health.version}: ${health.status}`);
 });
 
-const configureSync = (command: Command) => command.description('Fast-forward a clean main checkout; task branches are never updated')
+const configureSync = (command: Command) => command.description('Sync only clean main; watch clan notifications for upstream changes')
   .option('--repo <owner/repo>', 'GitHub repository (defaults to origin)')
   .option('--path <directory>', 'local checkout (defaults to current directory)', '.')
   .option('--repo-path <directory>', 'alias for --path')
+  .option('--clan <id>', 'clan to watch (defaults to the selected clan)')
   .option('--watch', 'keep syncing main until interrupted')
-  .option('--interval <seconds>', 'watch polling interval (1–3600 seconds)', '15')
-  .action(async (options: { repo?: string; path: string; repoPath?: string; watch?: boolean; interval: string }) => {
+  .option('--interval <seconds>', 'clan event polling interval (1–3600 seconds)', '15')
+  .option('--fallback <seconds>', 'Git safety check interval (1–86400 seconds)', '300')
+  .action(async (options: { repo?: string; path: string; repoPath?: string; clan?: string; watch?: boolean; interval: string; fallback: string }, command: Command) => {
     const interval = Number(options.interval);
+    const fallback = Number(options.fallback);
     if (!Number.isFinite(interval) || interval < 1 || interval > 3600) throw new Error('Use an interval between 1 and 3600 seconds');
+    if (!Number.isFinite(fallback) || fallback < 1 || fallback > 86400) throw new Error('Use a fallback between 1 and 86400 seconds');
     const repoPath = options.repoPath ?? options.path;
     const repository = options.repo === undefined ? (await localRepository(repoPath)).repository : repositorySlugSchema.parse(options.repo);
     const controller = new AbortController();
     const stop = () => controller.abort();
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
     let previous = '';
-    try {
-      while (!controller.signal.aborted) {
-        try {
-          const result = await syncMain({ repoPath, repository, signal: controller.signal });
-          const signature = JSON.stringify(result);
-          if (program.opts().json || signature !== previous) {
-            output(result, `${result.repository} main: ${result.status}${result.reason ? ` (${result.reason})` : ''}\n` +
-              `Local: ${result.headSha ?? 'missing'}  Origin: ${result.remoteSha}`);
-          }
-          previous = signature;
-        } catch (error) {
-          if (controller.signal.aborted) break;
-          if (!options.watch) throw error;
-          previous = '';
-          const message = error instanceof Error ? error.message : 'Repository sync failed';
-          console.error(program.opts().json ? JSON.stringify({ error: { code: 'REPO_SYNC_FAILED', message } }) : `Sync failed: ${message}`);
-        }
-        if (!options.watch || controller.signal.aborted) break;
-        await new Promise<void>((resolve) => {
-          const done = () => { clearTimeout(timer); controller.signal.removeEventListener('abort', done); resolve(); };
-          const timer = setTimeout(done, interval * 1000);
-          controller.signal.addEventListener('abort', done, { once: true });
-          if (controller.signal.aborted) done();
-        });
+    const onResult = (result: Awaited<ReturnType<typeof syncMain>>) => {
+      const signature = JSON.stringify(result);
+      if (program.opts().json || signature !== previous) {
+        output(result, `${result.repository} main: ${result.status}${result.reason ? ` (${result.reason})` : ''}\n` +
+          `Local: ${result.headSha ?? 'missing'}  Origin: ${result.remoteSha}`);
       }
+      previous = signature;
+    };
+    const onError = (error: unknown) => {
+      previous = '';
+      const message = error instanceof Error ? error.message : 'Repository sync failed';
+      console.error(program.opts().json ? JSON.stringify({ error: { code: 'REPO_SYNC_FAILED', message } }) : `Sync failed: ${message}`);
+    };
+    try {
+      if (!options.watch) { onResult(await syncMain({ repoPath, repository, signal: controller.signal })); return; }
+      const config = await readConfig(apiUrl());
+      const token = process.env.CLQN_TOKEN ?? config.token;
+      const api = token ? new ClqnClient(apiUrl(), token) : undefined;
+      let clanId = options.clan ?? process.env.CLQN_CLAN_ID ?? config.clanId;
+      const resolveClan = async (signal?: AbortSignal) => {
+        if (!clanId && api) clanId = (await api.whoami(signal)).clanId;
+        if (!clanId) throw new Error('Select a clan with init, join, or --clan to watch repository events');
+        return clanId;
+      };
+      // Establish the watermark BEFORE the startup Git fetch, so a concurrent push cannot be skipped.
+      let initialCursor = 0;
+      if (api) {
+        try {
+          const links = await api.repositories(await resolveClan(controller.signal), controller.signal);
+          initialCursor = links.repositories.find((link) => link.slug === repository)?.lastEventSequence ?? 0;
+        } catch (error) { if (!controller.signal.aborted) onError(error); }
+      }
+      // Preserve an explicitly selected legacy local polling interval; the new default is five minutes.
+      const localInterval = command.getOptionValueSource('interval') === 'cli' && command.getOptionValueSource('fallback') !== 'cli'
+        ? interval : fallback;
+      if (!program.opts().json && !controller.signal.aborted) console.error(api
+        ? `Watching clan events; Git safety check every ${fallback} seconds.`
+        : `Watching main locally; Git check every ${localInterval} seconds. Link a clan repository for notifications.`);
+      await runSyncWatch({ repoPath, repository, signal: controller.signal, pollIntervalMs: interval * 1000,
+        fallbackIntervalMs: (api ? fallback : localInterval) * 1000, initialCursor, onResult, onError,
+        ...(api ? { getEvents: async (cursor: number, signal?: AbortSignal) => api.events(await resolveClan(signal), cursor, 100, signal) } : {}) });
     } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
   });
 
 configureSync(program.command('sync'));
-const repo = program.command('repo', { hidden: true }).description('Repository commands (use clqn sync for main syncing)');
-configureSync(repo.command('sync'));
+const repo = program.command('repo').description('Link GitHub repositories for main-change notifications');
+configureSync(repo.command('sync', { hidden: true }));
+const repoSelection = async (name: string | undefined, options: { repo?: string; path: string }) => {
+  if (name && options.repo && name !== options.repo) throw new Error('Provide one repository');
+  return name || options.repo ? repositorySlugSchema.parse(name ?? options.repo) : (await localRepository(options.path)).repository;
+};
+repo.command('link [repository]').description('Connect GitHub main-change webhooks to this clan (leader only)')
+  .option('--repo <owner/repo>', 'alternative to positional repository').option('--path <directory>', 'local clone', '.')
+  .option('--clan <id>', 'clan ID')
+  .action(async (name: string | undefined, options: { repo?: string; path: string; clan?: string }) => {
+    const slug = await repoSelection(name, options);
+    const api = await client(); const clanId = await selectedClan(options);
+    const setup = await api.linkRepository(clanId, slug);
+    const url = new URL(setup.webhook.path, apiUrl()).href;
+    try {
+      const webhook = await configureGithubWebhook({ repository: slug, url, secret: setup.webhook.secret });
+      // Never print or persist the per-link webhook secret, even in JSON mode.
+      output({ repository: setup.repository, webhook }, `Linked ${slug} to clan ${clanId}.\nRun clqn sync --watch on each machine.`);
+    } catch (error) {
+      throw new Error(`The clan link was saved, but GitHub setup failed. Fix gh authentication or repository admin access and retry repo link. ${error instanceof Error ? error.message : 'GitHub operation failed'}`);
+    }
+  });
+repo.command('list').description('List this clan’s linked GitHub repositories').option('--clan <id>', 'clan ID')
+  .action(async (options: { clan?: string }) => {
+    const result = await (await client()).repositories(await selectedClan(options));
+    output(result, result.repositories.map((link) => `${link.slug}  ${link.id}`).join('\n') || 'No linked repositories.');
+  });
+repo.command('unlink [repository]').description('Disable a clan link and remove its GitHub webhook (leader only)')
+  .option('--repo <owner/repo>', 'alternative to positional repository').option('--path <directory>', 'local clone', '.')
+  .option('--clan <id>', 'clan ID')
+  .action(async (name: string | undefined, options: { repo?: string; path: string; clan?: string }) => {
+    const slug = await repoSelection(name, options);
+    const api = await client(); const clanId = await selectedClan(options);
+    const binding = (await api.repositories(clanId)).repositories.find((link) => link.slug === slug);
+    if (!binding) throw new Error('Repository is not linked to this clan');
+    // Revoke server access first, which also proves personal leader authorization before touching GitHub.
+    await api.unlinkRepository(clanId, binding.id);
+    try {
+      const removed = await removeGithubWebhook({ repository: slug, url: new URL(`/hooks/github/${binding.id}`, apiUrl()).href });
+      output({ unlinked: true, repository: slug, webhookRemoved: removed.removed }, `Unlinked ${slug}.`);
+    } catch (error) {
+      throw new Error(`The clan link is disabled. Remove its old webhook in GitHub repository settings. ${error instanceof Error ? error.message : 'GitHub operation failed'}`);
+    }
+  });
 
 program.command('login').description('Save a server-provisioned user token for this API')
   .option('--token-stdin', 'read the token from standard input')

@@ -20,6 +20,9 @@ async function fixture(t) {
     Object.assign(process.env, saved);
     await rm(root, { recursive: true, force: true });
   });
+  process.env.CLQN_CONFIG_DIR = join(root, 'config');
+  delete process.env.CLQN_TOKEN;
+  delete process.env.CLQN_CLAN_ID;
   process.env.GIT_CONFIG_GLOBAL = devNull;
   process.env.GIT_CONFIG_NOSYSTEM = '1';
   delete process.env.GIT_CONFIG_COUNT;

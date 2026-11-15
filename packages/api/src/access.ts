@@ -22,5 +22,7 @@ export async function requireClan(db: WorkspaceDb, actor: Actor, clanId: string)
 // Allocate each clan's event cursor only after earlier writers commit, so polling cannot skip late commits.
 export async function appendEvent(tx: Pick<WorkspaceDb, 'execute' | 'insert'>, event: typeof events.$inferInsert) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${event.clanId}::text, 0))`);
-  await tx.insert(events).values(event);
+  const [row] = await tx.insert(events).values(event).returning({ sequence: events.sequence });
+  if (!row) throw new Error('Event creation returned no row');
+  return row.sequence;
 }

@@ -1,3 +1,5 @@
+import { linkRepositorySchema, linkedRepositorySchema, linkedRepositoriesSchema, linkedRepositorySetupSchema, unlinkedRepositorySchema } from './repositories.js';
+export * from './repositories.js';
 import { memberPolicySchema, updatePolicySchema, type UpdatePolicy } from './policy.js';
 export * from './policy.js';
 import { z } from 'zod';
@@ -56,10 +58,10 @@ export class ClqnClient {
       throw new Error('Authenticated requests require HTTPS except on loopback');
     }
   }
-  private async request<T>(path: string, schema: z.ZodType<T>, body?: unknown): Promise<T> {
+  private async request<T>(path: string, schema: z.ZodType<T>, body?: unknown, signal?: AbortSignal): Promise<T> {
     const response = await fetch(new URL(path, this.baseUrl), {
       method: body === undefined ? 'GET' : 'POST',
-      signal: AbortSignal.timeout(10_000),
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(10_000), signal]) : AbortSignal.timeout(10_000),
       redirect: 'error',
       headers: { accept: 'application/json', ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -73,7 +75,7 @@ export class ClqnClient {
     return schema.parse(await response.json());
   }
   health(): Promise<Health> { return this.request('/health', healthSchema); }
-  whoami() { return this.request('/v1/me', actorSchema); }
+  whoami(signal?: AbortSignal) { return this.request('/v1/me', actorSchema, undefined, signal); }
   createClan(name: string): Promise<Clan> { return this.request('/v1/clans', clanSchema, createClanSchema.parse({ name })); }
   listClans() { return this.request('/v1/clans', clansSchema); }
   members(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/members`, membersSchema); }
@@ -91,6 +93,18 @@ export class ClqnClient {
   policy(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/policy`, memberPolicySchema); }
   updatePolicy(clanId: string, policy: UpdatePolicy) {
     return this.request(`/v1/clans/${encodeURIComponent(clanId)}/policy`, memberPolicySchema, updatePolicySchema.parse(policy));
+  }
+  linkRepository(clanId: string, slug: string) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/repositories`, linkedRepositorySetupSchema, linkRepositorySchema.parse({ slug }));
+  }
+  repositories(clanId: string, signal?: AbortSignal) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/repositories`, linkedRepositoriesSchema, undefined, signal);
+  }
+  repository(clanId: string, repositoryId: string, signal?: AbortSignal) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/repositories/${encodeURIComponent(repositoryId)}`, linkedRepositorySchema, undefined, signal);
+  }
+  unlinkRepository(clanId: string, repositoryId: string) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/repositories/${encodeURIComponent(repositoryId)}/unlink`, unlinkedRepositorySchema, {});
   }
   listContext(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/context`, contextListSchema); }
   readContext(clanId: string, key: string) {
@@ -129,8 +143,8 @@ export class ClqnClient {
     return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/${action}`, taskSchema, {});
   }
 
-  events(clanId: string, cursor = 0, limit = 100) {
-    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/events?cursor=${cursor}&limit=${limit}`, eventsSchema);
+  events(clanId: string, cursor = 0, limit = 100, signal?: AbortSignal) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/events?cursor=${cursor}&limit=${limit}`, eventsSchema, undefined, signal);
   }
   stats(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/stats`, statsSchema); }
   status(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/status`, statusSchema); }
