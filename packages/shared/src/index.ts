@@ -3,7 +3,7 @@ export * from './policy.js';
 import { z } from 'zod';
 import { actorSchema, agentSchema, agentsSchema, agentRegistrationSchema, registerAgentSchema } from './agents.js';
 import { contextKeySchema, contextEntrySchema, contextListSchema, contextHistorySchema, writeContextSchema } from './context.js';
-import { taskSchema, tasksSchema, createTaskSchema } from './tasks.js';
+import { taskSchema, tasksSchema, createTaskSchema, assignTaskSchema, repositoryReportSchema, integrationReportSchema, type RepositoryInput, type RepositoryReport, type IntegrationReport } from './tasks.js';
 import { eventsSchema, statsSchema, statusSchema } from './activity.js';
 export * from './activity.js';
 export * from './agents.js';
@@ -83,8 +83,8 @@ export class ClqnClient {
   joinClan(code: string): Promise<Clan> {
     return this.request('/v1/invitations/join', clanSchema, joinInvitationSchema.parse({ code }));
   }
-  registerAgent(clanId: string, name: string) {
-    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/agents`, agentRegistrationSchema, registerAgentSchema.parse({ name }));
+  registerAgent(clanId: string, name: string, role: 'worker' | 'orchestrator' = 'worker') {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/agents`, agentRegistrationSchema, registerAgentSchema.parse({ name, role }));
   }
   listAgents(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/agents`, agentsSchema); }
   agentStatus() { return this.request('/v1/agent', agentSchema); }
@@ -106,8 +106,23 @@ export class ClqnClient {
     contextKeySchema.parse(key);
     return this.request(`/v1/clans/${encodeURIComponent(clanId)}/context/${encodeURIComponent(key)}/history`, contextHistorySchema);
   }
-  createTask(clanId: string, description: string) {
-    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks`, taskSchema, createTaskSchema.parse({ description }));
+  createTask(clanId: string, description: string, repository?: RepositoryInput) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks`, taskSchema, createTaskSchema.parse({ description, ...(repository ? { repository } : {}) }));
+  }
+  task(clanId: string, taskId: string) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}`, taskSchema);
+  }
+  assignTask(clanId: string, taskId: string, agentId: string) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/assign`, taskSchema, assignTaskSchema.parse({ agentId }));
+  }
+  unassignTask(clanId: string, taskId: string, agentId: string) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/unassign`, taskSchema, assignTaskSchema.parse({ agentId }));
+  }
+  reportTaskRepository(clanId: string, taskId: string, report: RepositoryReport) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/repository`, taskSchema, repositoryReportSchema.parse(report));
+  }
+  integrateTask(clanId: string, taskId: string, report: IntegrationReport) {
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/integration`, taskSchema, integrationReportSchema.parse(report));
   }
   listTasks(clanId: string) { return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks`, tasksSchema); }
   transitionTask(clanId: string, taskId: string, action: 'claim' | 'release' | 'complete') {

@@ -69,7 +69,7 @@ export function createApp(store?: WorkspaceStore, db?: WorkspaceDb) {
     if (!id.success) return c.json({ error: { code: 'NOT_FOUND', message: 'Clan not found' } }, 404);
     const parsed = registerAgentSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: { code: 'INVALID_REQUEST', message: 'Provide an agent name between 1 and 100 characters' } }, 400);
-    return c.json(await store!.registerAgent(c.get('user'), id.data, parsed.data.name), 201);
+    return c.json(await store!.registerAgent(c.get('user'), id.data, parsed.data.name, parsed.data.role), 201);
   });
   app.get('/v1/clans/:clanId/agents', async (c) => {
     const id = z.uuid().safeParse(c.req.param('clanId'));

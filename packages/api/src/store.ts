@@ -11,7 +11,7 @@ export type Member = { userId: string; email: string; role: 'leader' | 'member';
 export interface WorkspaceStore {
   createInvitation(userId: string, clanId: string, email: string): Promise<{ code: string; clanId: string; email: string; expiresAt: string } | undefined>;
   joinInvitation(user: User, code: string): Promise<Clan | undefined>;
-  registerAgent(actor: Actor, clanId: string, name: string): Promise<{ agent: Agent; token: string }>;
+  registerAgent(actor: Actor, clanId: string, name: string, role?: Agent['role']): Promise<{ agent: Agent; token: string }>;
   listAgents(actor: Actor, clanId: string): Promise<Agent[]>;
   agentStatus(actor: Actor): Promise<Agent | undefined>;
   authenticate(tokenHash: string): Promise<Actor | undefined>;
@@ -41,17 +41,28 @@ export function createStore(url: string) {
       }
       return actor;
     },
-    async registerAgent(actor, clanId, name) {
+    async registerAgent(actor, clanId, name, role = 'worker') {
       requirePersonal(actor);
       const token = `clqn_${randomBytes(32).toString('base64url')}`;
-      return db.transaction(async (tx) => {
-        await requireClan(tx, actor, clanId);
-        const [agent] = await tx.insert(schema.agents).values({ clanId, ownerId: actor.id, name }).returning();
-        if (!agent) throw new Error('Agent creation returned no row');
-        await tx.insert(schema.credentials).values({ userId: actor.id, agentId: agent.id, tokenHash: hashToken(token) });
-        await appendEvent(tx, { clanId, actorId: actor.id, type: 'agent.registered', resourceId: agent.id });
-        return { agent: agentView(agent), token };
-      });
+      try {
+        return await db.transaction(async (tx) => {
+          const membership = await requireClan(tx, actor, clanId);
+          if (role === 'orchestrator' && membership.role !== 'leader') {
+            throw new ApiError(403, 'FORBIDDEN', 'Only the clan leader can register the orchestrator');
+          }
+          const [agent] = await tx.insert(schema.agents).values({ clanId, ownerId: actor.id, name, role }).returning();
+          if (!agent) throw new Error('Agent creation returned no row');
+          await tx.insert(schema.credentials).values({ userId: actor.id, agentId: agent.id, tokenHash: hashToken(token) });
+          await appendEvent(tx, { clanId, actorId: actor.id, type: 'agent.registered', resourceId: agent.id });
+          return { agent: agentView(agent), token };
+        });
+      } catch (error) {
+        const cause = (error as { cause?: { code?: string; constraint_name?: string } }).cause;
+        if (cause?.code === '23505' && cause.constraint_name === 'agents_one_orchestrator_per_clan') {
+          throw new ApiError(409, 'ORCHESTRATOR_EXISTS', 'This clan already has an orchestrator');
+        }
+        throw error;
+      }
     },
     async listAgents(actor, clanId) {
       await requireClan(db, actor, clanId);

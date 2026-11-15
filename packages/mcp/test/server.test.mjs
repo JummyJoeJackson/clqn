@@ -18,7 +18,7 @@ test('MCP discovers and calls the health tool through the protocol', async (t) =
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 12);
+  assert.equal(tools.length, 17);
   assert.ok(tools.some((tool) => tool.name === 'clqn_get_policy'));
   assert.ok(!tools.some((tool) => /set_policy|update_policy/.test(tool.name)));
   assert.ok(tools.some((tool) => tool.name === 'clqn_get_status'));
@@ -58,4 +58,35 @@ test('MCP reads the owner policy without exposing policy mutation', async (t) =>
   const result = await client.callTool({ name: 'clqn_get_policy', arguments: {} });
   assert.equal(result.isError, undefined);
   assert.deepEqual(JSON.parse(result.content[0].text), policy);
+});
+
+test('MCP forwards repository assignments and authenticated reports with the exact head revisions', async (t) => {
+  const clanId = 'e6faf7c5-0b04-45de-8eba-c1fda2a17a89';
+  const taskId = 'f1796d17-12d5-4620-ad88-e285713350a1';
+  const agentId = '2ab811b5-a0aa-4310-9ee8-63191d37acfa';
+  const repository = { slug: 'test/project', baseBranch: 'main', baseSha: 'a'.repeat(40), branch: 'clqn/task-one' };
+  const calls = [];
+  const api = Object.fromEntries(['createTask', 'task', 'assignTask', 'unassignTask', 'reportTaskRepository', 'integrateTask'].map((name) =>
+    [name, async (...args) => { calls.push({ name, args }); return { ok: true }; }]));
+  const server = createMcpServer(api, clanId);
+  const client = new Client({ name: 'repository-test', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  t.after(async () => { await client.close(); await server.close(); });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  const report = { expectedHeadSha: null, headSha: 'b'.repeat(40), prNumber: 7, prUrl: 'https://github.com/test/project/pull/7' };
+  const integration = { headSha: report.headSha, mergeCommitSha: 'c'.repeat(40) };
+  for (const [name, args] of [
+    ['clqn_create_task', { description: 'Work', repository }], ['clqn_get_task', { taskId }],
+    ['clqn_assign_task', { taskId, agentId }], ['clqn_unassign_task', { taskId, agentId }],
+    ['clqn_report_task_repository', { taskId, ...report }], ['clqn_record_task_integration', { taskId, ...integration }],
+  ]) {
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(result.isError, undefined, JSON.stringify(result));
+  }
+  assert.deepEqual(calls, [
+    { name: 'createTask', args: [clanId, 'Work', repository] }, { name: 'task', args: [clanId, taskId] },
+    { name: 'assignTask', args: [clanId, taskId, agentId] }, { name: 'unassignTask', args: [clanId, taskId, agentId] },
+    { name: 'reportTaskRepository', args: [clanId, taskId, report] }, { name: 'integrateTask', args: [clanId, taskId, integration] },
+  ]);
 });

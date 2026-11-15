@@ -1,5 +1,6 @@
 import type { PolicySettings } from '@clqn/shared';
-import { pgTable, uuid, text, timestamp, primaryKey, pgEnum, bigserial, jsonb, integer } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { pgTable, uuid, text, timestamp, primaryKey, pgEnum, bigserial, jsonb, integer, check, uniqueIndex } from 'drizzle-orm/pg-core';
 
 export const membershipRole = pgEnum('membership_role', ['leader', 'member']);
 
@@ -31,8 +32,12 @@ export const agents = pgTable('agents', {
   clanId: uuid('clan_id').notNull().references(() => clans.id),
   ownerId: uuid('owner_id').notNull().references(() => users.id),
   name: text('name').notNull(),
+  role: text('role').$type<'worker' | 'orchestrator'>().notNull().default('worker'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  check('agents_role_valid', sql`${table.role} IN ('worker', 'orchestrator')`),
+  uniqueIndex('agents_one_orchestrator_per_clan').on(table.clanId).where(sql`${table.role} = 'orchestrator'`),
+]);
 
 // Opaque credentials are provisioned by the server operator; raw tokens are never stored.
 export const credentials = pgTable('credentials', {
