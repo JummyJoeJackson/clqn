@@ -7,7 +7,7 @@ import { tmpdir, devNull } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
-import { prepareWorktree, publishWorktree, inspectPullRequest, mergePullRequest, syncMain } from '../dist/git.js';
+import { prepareWorktree, publishWorktree, inspectPullRequest, mergePullRequest, syncMain, localRepository, repositoryForNewTask, taskWorktreeLocation, openTaskWorktree } from '../dist/git.js';
 
 const execute = promisify(execFile);
 const git = async (cwd, args) => (await execute('git', args, { cwd, encoding: 'utf8' })).stdout.trim();
@@ -364,4 +364,48 @@ test('repo sync watcher recovers from fetch errors, picks up later main commits,
   assert.equal(signal, null);
   assert.ok(stderr.trim().split('\n').every((line) => JSON.parse(line).error.code === 'REPO_SYNC_FAILED'));
   assert.equal(await git(f.repoPath, ['rev-parse', 'HEAD']), remoteSha);
+});
+
+
+test('short sync infers origin and current directory while keeping the old repo sync form', async (t) => {
+  const f = await fixture(t);
+  const remoteSha = await advanceMain(f);
+  const inferred = await localRepository(f.repoPath);
+  assert.deepEqual(inferred, { root: f.repoPath, repository: 'test/project' });
+  const call = (args, cwd = f.repoPath) => execute(process.execPath, [cli, ...args, '--json'], { cwd, env: process.env });
+  const result = JSON.parse((await call(['sync'])).stdout);
+  assert.equal(result.status, 'updated');
+  assert.equal(result.headSha, remoteSha);
+  assert.equal(JSON.parse((await call(['sync', '--path', f.repoPath], f.root)).stdout).status, 'unchanged');
+  assert.equal(JSON.parse((await call(['repo', 'sync', '--repo-path', f.repoPath], f.root)).stdout).status, 'unchanged');
+});
+
+test('code task defaults use the latest origin/main and a unique branch without modifying the checkout', async (t) => {
+  const f = await fixture(t);
+  const remoteSha = await advanceMain(f);
+  await writeFile(join(f.repoPath, 'file.txt'), 'uncommitted personal edits\n');
+  const first = await repositoryForNewTask(f.repoPath);
+  const second = await repositoryForNewTask(f.repoPath);
+  assert.equal(first.slug, 'test/project');
+  assert.equal(first.baseBranch, 'main');
+  assert.equal(first.baseSha, remoteSha);
+  assert.match(first.branch, /^clqn\/task-[0-9a-f-]+$/);
+  assert.notEqual(first.branch, second.branch);
+  assert.equal(await git(f.repoPath, ['rev-parse', 'HEAD']), f.baseSha);
+  assert.equal(await readFile(join(f.repoPath, 'file.txt'), 'utf8'), 'uncommitted personal edits\n');
+});
+
+test('automatic task directories can resume the same dirty worktree without creating another branch', async (t) => {
+  const f = await fixture(t);
+  const taskId = '712144c8-1638-4217-bbb1-8db77df3ae49';
+  const location = await taskWorktreeLocation({ repoPath: f.repoPath, taskId, repository: f.repository });
+  assert.equal(location.worktreePath, join(f.root, 'personal-712144c8'));
+  const prepared = await openTaskWorktree({ ...location, repository: f.repository });
+  await writeFile(join(prepared.path, 'draft.txt'), 'active work\n');
+  const resumedLocation = await taskWorktreeLocation({ repoPath: prepared.path, taskId, repository: f.repository });
+  assert.equal(resumedLocation.worktreePath, prepared.path);
+  assert.deepEqual(await openTaskWorktree({ ...resumedLocation, repository: f.repository }), prepared);
+  assert.equal(await readFile(join(prepared.path, 'draft.txt'), 'utf8'), 'active work\n');
+  await assert.rejects(openTaskWorktree({ repoPath: f.repoPath, worktreePath: f.repoPath, repository: f.repository }), /different branch/);
+  await assert.rejects(taskWorktreeLocation({ repoPath: f.repoPath, taskId, repository: { ...f.repository, slug: 'other/repo' } }), /Origin does not match/);
 });

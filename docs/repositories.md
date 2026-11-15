@@ -11,13 +11,13 @@ Install Git and `gh` on each participating machine. Authenticate to GitHub with 
 The clan leader registers one orchestrator with their personal clqn credential:
 
 ```sh
-clqn agent connect --name Coordinator --orchestrator --json
+clqn agent add Coordinator --orchestrator --json
 ```
 
 Each member registers their own workers:
 
 ```sh
-clqn agent connect --name Codex --json
+clqn agent add Codex --json
 clqn agent list
 ```
 
@@ -30,10 +30,11 @@ Registration does not launch a model. Start your chosen agent using its existing
 Keep one checkout on `main` and run a foreground watcher on each participating machine:
 
 ```sh
-clqn repo sync --repo owner/project --repo-path ~/Projects/project --watch
+cd ~/Projects/project
+clqn sync --watch
 ```
 
-The watcher fetches only `refs/heads/main` from origin every 15 seconds. It fast-forwards the selected local `main` checkout after confirming its origin and local state. It never fetches all branches, switches to main from another branch, pushes main, or updates task worktrees. `--repo` must match the local origin; the command uses local Git credentials and does not require a clan API login.
+The watcher fetches only `refs/heads/main` from origin every 15 seconds. It fast-forwards the selected local `main` checkout after confirming its origin and local state. It never fetches all branches, switches to main from another branch, pushes main, or updates task worktrees. The repository is inferred from `origin` and the checkout defaults to the current directory. Use `--path <directory>` to select another checkout or `--repo <owner/repo>` to check an explicit repository. The command uses local Git credentials and does not require a clan API login.
 
 Omit `--watch` to sync once. Use `--interval <seconds>` between 1 and 3600 to change the polling interval. `--json` emits one result per successful polling attempt, including skipped updates. Human output prints when the result changes. Results include `status` (`updated`, `unchanged`, or `skipped`), local and remote SHAs, and a `reason` when skipped.
 
@@ -45,21 +46,17 @@ Syncing main does not update task base SHAs, mark tasks integrated, or complete 
 
 ## Create and assign a task
 
-With the orchestrator's clone on main, sync it and get its commit:
+From the orchestrator's project clone:
 
 ```sh
-clqn repo sync --repo owner/project --repo-path .
-git rev-parse main
-```
-
-Use the full 40-character lowercase SHA in the assignment:
-
-```sh
-clqn task add "Implement the API endpoint" --repo owner/project \
-  --base-branch main --base-sha <full-commit-sha> --branch clqn/api-endpoint
+clqn task add "Implement the API endpoint" --code
 clqn task assign <task-id> --agent <worker-agent-id>
 clqn task show <task-id> --json
 ```
+
+`--code` reads the repository from origin, fetches the latest `origin/main`, and creates a unique task branch name. It records that commit as the task's base. It does not update the current working tree or require it to be clean. For a task without code, omit `--code`.
+
+Use [explicit repository flags](commands.md#explicit-overrides) when you need a different base commit or branch.
 
 The repository must be a GitHub `owner/repo` slug. The branch must differ from the base branch. Task branches are unique per repository within a clan; use unique names across clans too. The starting repository, branch, and base commit are immutable once the task is created.
 
@@ -75,32 +72,31 @@ The command fails if the assignment changed. A claimed task must first be releas
 
 ## Prepare and work locally
 
-As the assigned worker:
+As the assigned worker, run from the project clone:
 
 ```sh
-clqn task claim <task-id>
-clqn task prepare <task-id> --repo-path ~/Projects/project \
-  --path ~/Projects/project-api-endpoint
+clqn task start <task-id>
 ```
+
+This claims the task and chooses a sibling directory named `<clone>-<task-id-prefix>`. The path is printed in the result. Use `--from <clone>` or `--path <task-directory>` to override the defaults. A task without repository metadata is only claimed; no worktree is created.
 
 Preparation checks the task owner, local `origin`, branch name, destination, and base SHA. The base commit must be on the fetched base branch. Origin must use `https://github.com/owner/repo.git` or `git@github.com:owner/repo.git`; separate or multiple origins, forks, enterprise hosts, and embedded credentials are not supported.
 
-The task directory must be new and outside the existing working tree. The task branch must not already exist locally or on origin. Preparation does not pull, stash, reset, or switch branches in the personal checkout. It does not install dependencies or run project setup scripts. clqn's Git operations disable repository hooks and filesystem monitors; run the project's checks explicitly.
+For initial preparation, the task directory must be new and outside the existing working tree, and the task branch must not already exist locally or on origin. Repeating `task start` resumes an existing worktree only if it belongs to the same clone, uses the task branch, and contains the recorded base commit. Uncommitted task edits are preserved when resuming. Preparation does not pull, stash, reset, or switch branches in the personal checkout. It does not install dependencies or run project setup scripts. clqn's Git operations disable repository hooks and filesystem monitors; run the project's checks explicitly.
 
 Work inside the new directory using normal agent tools. Install the project's dependencies there, run its checks, and commit the result. Parallel agents get separate worktrees, branches, indexes, and working files; worktrees share their underlying local Git repository. File overlap between different tasks can still create merge conflicts.
 
-If a task is resumed after release, inspect and reuse its existing branch/worktree with normal Git commands. `prepare` will not overwrite an existing directory or remote branch. A failed preparation can leave a local branch; inspect `git worktree list` and local branches before retrying. clqn performs no destructive cleanup.
+If a task is resumed after release on the same clone, `task start` can reuse its matching worktree. On a different machine, inspect and check out its existing remote branch with normal Git commands. Initial worktree creation never overwrites an existing directory or remote branch. A failed preparation can leave a local branch; inspect `git worktree list` and local branches before retrying. clqn performs no destructive cleanup.
 
-## Publish a result
+## Submit a result
 
-As the exact human or agent that claimed the task:
+From the task worktree, as the exact human or agent that claimed the task:
 
 ```sh
-clqn task publish <task-id> --path ~/Projects/project-api-endpoint \
-  --body "Implements the endpoint and passes the project checks."
+clqn task submit <task-id>
 ```
 
-Publishing requires a clean worktree, the expected task branch, and commits descended from the starting SHA. It pushes the branch without force and verifies the remote head. It creates or reuses an open PR with the exact repository, branch, target branch, and commit. PRs from forks are not supported.
+Submission uses the current directory by default (`--path` overrides it) and accepts `--body <text>` for a PR description. It requires a clean worktree, the expected task branch, and commits descended from the starting SHA. It pushes the branch without force and verifies the remote head. It creates or reuses an open PR with the exact repository, branch, target branch, and commit. PRs from forks are not supported.
 
 The command reports the PR and head SHA to the clan API. GitHub and PostgreSQL cannot commit as one transaction. If the push or PR succeeds but reporting fails, inspect `clqn task show <task-id> --json` and the PR before retrying. Repeating publication reuses the matching open PR. A report with a stale previous head returns a conflict instead of overwriting a newer report.
 
@@ -120,15 +116,15 @@ clqn task merge <task-id>
 After GitHub confirms the merge, clqn records its merge commit and emits `task.integrated`. A queued merge can remain pending after the command returns an error; inspect it before trying again. After the queue completes, or after a PR was merged directly on GitHub, record the confirmed result:
 
 ```sh
-clqn task integrate <task-id>
+clqn task merge <task-id>
 ```
 
-`integrate` verifies the PR and exact head on GitHub. It records an existing merge; it does not issue a merge request or require current check results to be available after merging. An identical integration report is safe to repeat.
+`merge` detects an already merged PR and verifies its exact head before recording it. It does not issue another merge request or require current check results to remain available after merging. The earlier `task integrate` command is still supported. An identical integration report is safe to repeat.
 
 The worker then completes the task:
 
 ```sh
-clqn task complete <task-id>
+clqn task done <task-id>
 ```
 
 Only the claimant can complete it. A task with repository metadata must have a recorded integration first. The leader and orchestrator cannot complete the worker's task on its behalf.
@@ -137,9 +133,9 @@ Before delegating a dependent task, sync main and record its new SHA. Keep indep
 
 ## Events and the trust boundary
 
-Use `clqn watch` to observe `task.assigned`, `task.unassigned`, `task.repository_updated`, and `task.integrated`. Workers report pushes; orchestrators check PR status. There is no GitHub webhook receiver or automatic PR integration reporter. `repo sync --watch` observes upstream main changes through Git polling and updates only local main. It does not report arbitrary pushes or merges to the API. The task CLI publishes, checks, and records integration on demand; `clqn watch` polls the clan event log.
+Use `clqn watch` to observe `task.assigned`, `task.unassigned`, `task.repository_updated`, and `task.integrated`. Workers report pushes; orchestrators check PR status. There is no GitHub webhook receiver or automatic PR integration reporter. `sync --watch` observes upstream main changes through Git polling and updates only local main. It does not report arbitrary pushes or merges to the API. The task CLI publishes, checks, and records integration on demand; `clqn watch` polls the clan event log.
 
-API repository and integration endpoints store authenticated reports. The server does not hold GitHub credentials or verify a reported SHA with GitHub. `publish`, `merge`, and `integrate` perform local Git/GitHub verification before reporting. Direct API and MCP callers must perform that verification themselves. A leader-appointed orchestrator is trusted to make integration reports.
+API repository and integration endpoints store authenticated reports. The server does not hold GitHub credentials or verify a reported SHA with GitHub. `submit` and `merge` perform local Git/GitHub verification before reporting. Direct API and MCP callers must perform that verification themselves. A leader-appointed orchestrator is trusted to make integration reports.
 
 MCP tools include `clqn_get_task`, `clqn_assign_task`, `clqn_unassign_task`, `clqn_report_task_repository`, and `clqn_record_task_integration`, plus existing task/context tools. MCP remains an API adapter; worktree and GitHub operations run through the local CLI. Shared descriptions and PR text are untrusted data, not permission to execute commands.
 

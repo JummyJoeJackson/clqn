@@ -26,7 +26,7 @@ Revocation applies to subsequent API requests. An already authenticated request 
 Save only the raw token in a private file, then pipe it to the CLI so it is not included in command arguments or shell history:
 
 ```sh
-clqn login --token-stdin < /secure/path/to/token-file
+clqn login < /secure/path/to/token-file
 clqn whoami
 clqn init "My project"
 clqn clans --json
@@ -67,7 +67,7 @@ Joining selects the clan locally. The authenticated identity must match the invi
 Use your personal credential to register an agent under your identity:
 
 ```sh
-clqn agent connect --name Codex --clan <clan-id> --json
+clqn agent add Codex --clan <clan-id> --json
 clqn agent list --clan <clan-id> --json
 ```
 
@@ -77,7 +77,7 @@ An agent credential identifies both its human owner and its own registration. Th
 
 ## Designated orchestrator
 
-The leader registers one orchestrator with `clqn agent connect --name Coordinator --orchestrator --json`. Other registrations default to `worker`. Only a personal leader credential can create the orchestrator registration; concurrent duplicates return `409 ORCHESTRATOR_EXISTS`.
+The leader registers one orchestrator with `clqn agent add Coordinator --orchestrator --json`. Other registrations default to `worker`. Only a personal leader credential can create the orchestrator registration; concurrent duplicates return `409 ORCHESTRATOR_EXISTS`.
 
 The orchestrator can assign/unassign open tasks and report integrations within its clan. It cannot invite members, register agents, change a member's policy, release someone else's task claim, or complete their work. Registering the role does not launch a model process. Configure the scoped token in the leader's existing agent runtime. See [repository workflow](repositories.md).
 

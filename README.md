@@ -43,7 +43,7 @@ clqn --version
 
 ## Example usage
 
-Run these commands from any directory. Replace values in angle brackets, such as `<task-id>`, with actual values.
+Account and clan commands work from any directory. Run code commands from the project clone or task directory as noted below. Replace values in angle brackets, such as `<task-id>`, with actual values.
 
 ### 1. Connect to the hosted API
 
@@ -62,7 +62,7 @@ Set `CLQN_API_URL` in each terminal, or add it to your shell configuration. All 
 Get a personal token from your clqn operator. Save only the token in a private file, then log in:
 
 ```sh
-clqn login --token-stdin < /secure/path/to/alice-token
+clqn login < /secure/path/to/alice-token
 clqn whoami
 clqn init "My project"
 clqn members
@@ -81,7 +81,7 @@ clqn invite bob@example.com
 Share the returned code with Bob privately. In his own terminal, Bob logs in with his personal token and joins:
 
 ```sh
-clqn login --token-stdin < /secure/path/to/bob-token
+clqn login < /secure/path/to/bob-token
 clqn join <invite-code>
 clqn members
 ```
@@ -121,31 +121,30 @@ Install Git and the GitHub CLI (`gh`) on each machine that works with code. Auth
 As the leader, register your chosen orchestrator once:
 
 ```sh
-clqn agent connect --name Coordinator --orchestrator --json
+clqn agent add Coordinator --orchestrator --json
 ```
 
-Keep its returned token private and configure it in the orchestrator's environment. Register workers with `clqn agent connect --name Codex --json`. These commands register identities; they do not start agent processes.
+Keep its returned token private and configure it in the orchestrator's environment. Register workers with `clqn agent add Codex --json`. These commands register identities; they do not start agent processes.
 
-In the orchestrator's session, create a task with the full starting commit SHA and a unique branch. Then assign it to a registered worker:
+From the project clone, the orchestrator creates a code task and assigns it to a worker. `--code` uses this repository, fetches the latest `origin/main`, and chooses a unique task branch:
 
 ```sh
-clqn task add "Review the API contract" --repo owner/project \
-  --base-sha <full-commit-sha> --branch clqn/api-contract
+clqn task add "Review the API contract" --code
 clqn task assign <task-id> --agent <worker-agent-id>
 ```
 
-In the worker's session, use its own agent token to claim the task and prepare a worktree:
+In the worker's session, run this from the project clone using its own agent token:
 
 ```sh
-clqn task claim <task-id>
-clqn task prepare <task-id> --repo-path ~/Projects/project \
-  --path ~/Projects/project-api-contract
+clqn task start <task-id>
 ```
 
-The command fetches the base branch and creates a separate directory at the recorded commit. It leaves the existing checkout, including uncommitted work, in place. Do the work, install dependencies as needed, run tests, and commit in that task directory. Then publish:
+`start` claims the task and prepares a separate worktree. It chooses a directory beside the clone and prints its path. Running it again resumes the same worktree. Your existing checkout stays in place.
+
+Change into the printed directory. Do the work, run tests, and commit. Then submit from that directory:
 
 ```sh
-clqn task publish <task-id> --path ~/Projects/project-api-contract
+clqn task submit <task-id>
 ```
 
 The worker pushes without force, creates or reuses the matching PR, and reports its head commit to the clan. In the orchestrator's session:
@@ -155,21 +154,22 @@ clqn task check <task-id>
 clqn task merge <task-id>
 ```
 
-`merge` requires passing checks, matches the recorded PR head, and respects GitHub protections. It records integration only after GitHub confirms a merge. If a merge queue is still processing, run `clqn task integrate <task-id>` after it finishes.
+`merge` requires passing checks, matches the recorded PR head, and respects GitHub protections. It records integration only after GitHub confirms a merge. If a merge queue is still processing, run `clqn task merge <task-id>` again after it finishes.
 
-The worker can then run `clqn task complete <task-id>`. A repository task cannot complete before integration is recorded. Use the latest `main` commit before creating dependent tasks. Existing task worktrees stay on their recorded branches and commits; automatic sync never updates them.
+The worker can then run `clqn task done <task-id>`. A repository task cannot complete before integration is recorded. Use the latest `main` commit before creating dependent tasks. Existing task worktrees stay on their recorded branches and commits; automatic sync never updates them.
 
-For a task without code changes, use `clqn task add "Review the release notes"`, then claim and complete it without repository commands. See the [repository workflow](docs/repositories.md) for recovery, permissions, and current limits.
+For a task without code changes, use `clqn task add "Review the release notes"`, then use `task start` and `task done` without creating a worktree. See the [repository workflow](docs/repositories.md) for recovery, permissions, and current limits.
 
 ### 6. Keep only main synced
 
 Keep your main checkout on the `main` branch. In a separate terminal on each machine, run:
 
 ```sh
-clqn repo sync --repo owner/project --repo-path ~/Projects/project --watch
+cd ~/Projects/project
+clqn sync --watch
 ```
 
-The watcher polls only `origin/main` every 15 seconds and fast-forwards a clean local `main`. It skips dirty checkouts, local commits, diverged history, and checkouts on other branches. It never switches branches, pushes main, rebases, resets, or updates task worktrees. Stop it with Ctrl+C. Omit `--watch` for a single sync; add `--json` for structured results.
+The repository is read from `origin`; paths default to the current directory. Use `--path <directory>` to select another checkout. The watcher polls only `origin/main` every 15 seconds and fast-forwards a clean local `main`. It skips dirty checkouts, local commits, diverged history, and checkouts on other branches. It never switches branches, pushes main, rebases, resets, or updates task worktrees. Stop it with Ctrl+C. Omit `--watch` for a single sync; add `--json` for structured results.
 
 The watcher runs locally while this command is active. It does not start with an agent session automatically or update task integration records. `clqn watch` below observes clan events; it does not sync Git.
 
@@ -195,8 +195,8 @@ To resume after an event, pass its `sequence` as `--cursor <sequence>`.
 While logged in with your personal credential, register an agent:
 
 ```sh
-clqn agent connect --name Codex --clan <clan-id> --json
-clqn agent list --clan <clan-id>
+clqn agent add Codex --json
+clqn agent list
 ```
 
 The response contains `{ "agent": { ... }, "token": "clqn_..." }`. The token is shown once; store it privately. Registration leaves your saved personal login unchanged. Give each agent its own registration and token. Configure the local stdio server in your agent's MCP settings. Replace the API URL, token, and clan ID. The `clqn` command must be available on your agent's `PATH`:
@@ -223,12 +223,12 @@ The response contains `{ "agent": { ... }, "token": "clqn_..." }`. The token is 
 Save limits for your agents in the selected clan:
 
 ```sh
-clqn policy show
-clqn policy set --token-limit 100000 --models provider/model-a provider/model-b --control approve
-clqn policy show --json
+clqn limits
+clqn limits --tokens 100000 --models provider/model-a provider/model-b --control approve
+clqn limits --json
 ```
 
-Replace the example model identifiers with the exact identifiers your agent runner uses. The token cap covers total input and output tokens across your agents in this clan. Use `--token-limit none` for no cap or `--models any` for no model restriction.
+Replace the example model identifiers with the exact identifiers your agent runner uses. The token cap covers total input and output tokens across your agents in this clan. Use `--tokens none` for no cap or `--models any` for no model restriction.
 
 Choose a leader control level:
 
@@ -238,7 +238,11 @@ Choose a leader control level:
 
 Leaders cannot change another member's policy. These settings are saved preferences; token metering, execution approvals, and automatic agent launching are not implemented. They do not currently enforce model or usage limits. See [agent policies](docs/policies.md).
 
+The earlier command names still work. See the [command reference](docs/commands.md) for aliases and explicit overrides.
+
 ## Documentation
+
+- [Simple commands and compatibility](docs/commands.md)
 
 - [Repository workflow and orchestrator](docs/repositories.md)
 - [Agent policies](docs/policies.md)

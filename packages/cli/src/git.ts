@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { lstat, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { devNull } from 'node:os';
 
 const execute = promisify(execFile);
@@ -60,6 +61,55 @@ async function verifyOrigin(cwd: string, expected: string): Promise<void> {
     if (!match || slug(match[1]!) !== slug(expected)) throw new Error('Origin does not match the task GitHub repository');
   }
 }
+export async function localRepository(repoPath = '.') {
+  const directory = await realpath(repoPath);
+  const root = await realpath(await git(directory, ['rev-parse', '--show-toplevel']));
+  const urls = (await git(root, ['remote', 'get-url', '--all', 'origin'])).split('\n');
+  const match = urls.length === 1 ? (urls[0]!.match(/^https:\/\/github\.com\/([^/?#]+\/[^/?#]+?)(?:\.git)?\/?$/i)
+    ?? urls[0]!.match(/^git@github\.com:([^/?#]+\/[^/?#]+?)(?:\.git)?$/i)) : null;
+  if (!match) throw new Error('Origin must be a single GitHub HTTPS or SSH repository; use --repo for an explicit repository');
+  const repository = slug(match[1]!);
+  await verifyOrigin(root, repository);
+  return { root, repository };
+}
+
+export async function repositoryForNewTask(repoPath = '.'): Promise<RepositoryWork> {
+  const { root, repository } = await localRepository(repoPath);
+  await git(root, ['fetch', '--no-tags', '--no-recurse-submodules', 'origin', 'refs/heads/main:refs/remotes/origin/main']);
+  const baseSha = await git(root, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
+  if (!shaPattern.test(baseSha)) throw new Error('Origin main does not resolve to a commit');
+  return { slug: repository, baseBranch: 'main', baseSha, branch: `clqn/task-${randomUUID()}` };
+}
+
+export async function taskWorktreeLocation(input: { repoPath: string; taskId: string; repository: RepositoryWork; path?: string }) {
+  if (!/^[0-9a-f-]{36}$/.test(input.taskId)) throw new Error('Task ID must be a UUID');
+  const { root, repository } = await localRepository(input.repoPath);
+  if (repository !== slug(input.repository.slug)) throw new Error('Origin does not match the task GitHub repository');
+  const first = (await git(root, ['worktree', 'list', '--porcelain', '-z'])).split('\0').find((field) => field.startsWith('worktree '));
+  const primary = first ? first.slice('worktree '.length) : root;
+  return { repoPath: root, worktreePath: input.path ?? resolve(dirname(primary), `${basename(primary)}-${input.taskId.slice(0, 8)}`) };
+}
+
+export async function openTaskWorktree(input: { repoPath: string; worktreePath: string; repository: RepositoryWork }) {
+  try { await lstat(resolve(input.worktreePath)); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return prepareWorktree(input);
+  }
+  const path = await realpath(input.worktreePath);
+  const source = await realpath(await git(input.repoPath, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+  const common = await realpath(await git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+  const root = await realpath(await git(path, ['rev-parse', '--show-toplevel']));
+  if (common !== source || root !== path) throw new Error('Existing task path is not a worktree of this clone');
+  await validateRepository(input.repository, path);
+  if ((await git(path, ['symbolic-ref', '--quiet', '--short', 'HEAD'])) !== input.repository.branch) {
+    throw new Error('Existing task path is on a different branch');
+  }
+  try { await git(path, ['merge-base', '--is-ancestor', input.repository.baseSha, 'HEAD']); }
+  catch { throw new Error('Existing task worktree does not contain the assigned base commit'); }
+  return { path, branch: input.repository.branch, baseSha: input.repository.baseSha };
+}
+
 async function unusedPath(path: string): Promise<string> {
   const absolute = resolve(path);
   try { await lstat(absolute); } catch (error) {

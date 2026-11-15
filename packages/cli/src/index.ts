@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { ApiError, ClqnClient, VERSION, updatePolicySchema, type UpdatePolicy, repositoryInputSchema, repositorySlugSchema, type Task } from '@clqn/shared';
+import { ApiError, ClqnClient, VERSION, updatePolicySchema, type UpdatePolicy, registerAgentSchema, repositoryInputSchema, repositorySlugSchema, type Task } from '@clqn/shared';
 import { serveMcp } from '@clqn/mcp';
 import { readConfig, removeConfig, writeConfig } from './config.js';
-import { prepareWorktree, publishWorktree, inspectPullRequest, mergePullRequest, syncMain } from './git.js';
+import { prepareWorktree, publishWorktree, inspectPullRequest, mergePullRequest, syncMain, localRepository, repositoryForNewTask, taskWorktreeLocation, openTaskWorktree } from './git.js';
 
 const program = new Command()
   .name('clqn')
@@ -21,16 +21,17 @@ program.command('health').description('Check API liveness (not clan status or da
   output(health, `${health.service} ${health.version}: ${health.status}`);
 });
 
-const repo = program.command('repo').description('Keep only local main in sync with origin/main');
-repo.command('sync').description('Fast-forward a clean main checkout; task branches are never updated')
-  .requiredOption('--repo <owner/repo>', 'expected GitHub repository')
-  .option('--repo-path <directory>', 'local main checkout', '.')
+const configureSync = (command: Command) => command.description('Fast-forward a clean main checkout; task branches are never updated')
+  .option('--repo <owner/repo>', 'GitHub repository (defaults to origin)')
+  .option('--path <directory>', 'local checkout (defaults to current directory)', '.')
+  .option('--repo-path <directory>', 'alias for --path')
   .option('--watch', 'keep syncing main until interrupted')
   .option('--interval <seconds>', 'watch polling interval (1–3600 seconds)', '15')
-  .action(async (options: { repo: string; repoPath: string; watch?: boolean; interval: string }) => {
-    const repository = repositorySlugSchema.parse(options.repo);
+  .action(async (options: { repo?: string; path: string; repoPath?: string; watch?: boolean; interval: string }) => {
     const interval = Number(options.interval);
     if (!Number.isFinite(interval) || interval < 1 || interval > 3600) throw new Error('Use an interval between 1 and 3600 seconds');
+    const repoPath = options.repoPath ?? options.path;
+    const repository = options.repo === undefined ? (await localRepository(repoPath)).repository : repositorySlugSchema.parse(options.repo);
     const controller = new AbortController();
     const stop = () => controller.abort();
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
@@ -38,7 +39,7 @@ repo.command('sync').description('Fast-forward a clean main checkout; task branc
     try {
       while (!controller.signal.aborted) {
         try {
-          const result = await syncMain({ repoPath: options.repoPath, repository, signal: controller.signal });
+          const result = await syncMain({ repoPath, repository, signal: controller.signal });
           const signature = JSON.stringify(result);
           if (program.opts().json || signature !== previous) {
             output(result, `${result.repository} main: ${result.status}${result.reason ? ` (${result.reason})` : ''}\n` +
@@ -63,11 +64,14 @@ repo.command('sync').description('Fast-forward a clean main checkout; task branc
     } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
   });
 
+configureSync(program.command('sync'));
+const repo = program.command('repo', { hidden: true }).description('Repository commands (use clqn sync for main syncing)');
+configureSync(repo.command('sync'));
+
 program.command('login').description('Save a server-provisioned user token for this API')
   .option('--token-stdin', 'read the token from standard input')
   .action(async (options: { tokenStdin?: boolean }) => {
-    if (!options.tokenStdin) throw new Error('Use login --token-stdin and pipe a server-provisioned token to standard input');
-    if (process.stdin.isTTY) throw new Error('--token-stdin requires piped input');
+    if (process.stdin.isTTY) throw new Error('Pipe your token to clqn login, or redirect a private token file to standard input');
     const chunks: Buffer[] = [];
     let length = 0;
     for await (const chunk of process.stdin) {
@@ -142,7 +146,7 @@ const selectedClan = async (options: { clan?: string } = {}) => {
   if (config.clanId) return config.clanId;
   throw new Error('Select a clan with --clan <id>, CLQN_CLAN_ID, init, or join');
 };
-const policy = program.command('policy').description('Save your clan agent preferences (runtime enforcement is not available)');
+const policy = program.command('policy', { hidden: true }).description('Save your clan agent preferences (runtime enforcement is not available)');
 const policyOutput = (value: Awaited<ReturnType<ClqnClient['policy']>>) => output(value,
   `Policy revision ${value.revision} for ${value.userId} in ${value.clanId}\n` +
   `Token limit: ${value.tokenLimit ?? 'none'} (total input + output across your agents in this clan)\n` +
@@ -150,25 +154,35 @@ const policyOutput = (value: Awaited<ReturnType<ClqnClient['policy']>>) => outpu
   'Saved preferences only. Runtime enforcement is unavailable; this does not grant execution access.');
 policy.command('show').description('Show your saved policy for a clan').option('--clan <id>', 'clan ID')
   .action(async (options: { clan?: string }) => policyOutput(await (await client()).policy(await selectedClan(options))));
-policy.command('set').description('Update your policy; only your personal credential can change it')
-  .option('--clan <id>', 'clan ID')
-  .option('--token-limit <tokens>', 'total input + output token cap across your clan agents; 0 requests no usage, none removes the cap')
-  .option('--models <ids...>', 'allowed exact model identifiers, separated by spaces; any removes the restriction')
-  .option('--control <level>', 'manual: you start work; approve: approve each leader request; automatic: leader requests within limits')
-  .action(async (options: { clan?: string; tokenLimit?: string; models?: string[]; control?: string }) => {
-    const changes: Record<string, unknown> = {};
-    if (options.tokenLimit !== undefined) {
-      if (options.tokenLimit !== 'none' && !/^\d+$/.test(options.tokenLimit)) throw new Error('Token limit must be a nonnegative integer or none');
-      changes.tokenLimit = options.tokenLimit === 'none' ? null : Number(options.tokenLimit);
-    }
-    if (options.models !== undefined) changes.allowedModels = options.models.length === 1 && options.models[0] === 'any' ? null : options.models;
-    if (options.control !== undefined) changes.control = options.control;
-    // Validate before network access. The API validates again and rejects stale revisions.
-    updatePolicySchema.parse({ ...changes, expectedRevision: 0 });
-    const api = await client();
-    const clanId = await selectedClan(options);
-    const current = await api.policy(clanId);
-    policyOutput(await api.updatePolicy(clanId, { ...changes, expectedRevision: current.revision } as UpdatePolicy));
+interface LimitOptions { clan?: string; tokenLimit?: string; tokens?: string; models?: string[]; control?: string }
+const configureLimits = (command: Command) => command.option('--clan <id>', 'clan ID')
+  .option('--tokens <number>', 'total token cap; 0 requests no usage, none removes the cap')
+  .option('--token-limit <number>', 'alias for --tokens')
+  .option('--models <ids...>', 'allowed model identifiers; any removes the restriction')
+  .option('--control <level>', 'manual, approve, or automatic');
+const setLimits = async (options: LimitOptions) => {
+  if (options.tokens !== undefined && options.tokenLimit !== undefined && options.tokens !== options.tokenLimit) {
+    throw new Error('Use one token limit');
+  }
+  const changes: Record<string, unknown> = {};
+  const tokens = options.tokens ?? options.tokenLimit;
+  if (tokens !== undefined) {
+    if (tokens !== 'none' && !/^\d+$/.test(tokens)) throw new Error('Token limit must be a nonnegative integer or none');
+    changes.tokenLimit = tokens === 'none' ? null : Number(tokens);
+  }
+  if (options.models !== undefined) changes.allowedModels = options.models.length === 1 && options.models[0] === 'any' ? null : options.models;
+  if (options.control !== undefined) changes.control = options.control;
+  updatePolicySchema.parse({ ...changes, expectedRevision: 0 });
+  const api = await client();
+  const clanId = await selectedClan(options);
+  const current = await api.policy(clanId);
+  policyOutput(await api.updatePolicy(clanId, { ...changes, expectedRevision: current.revision } as UpdatePolicy));
+};
+configureLimits(policy.command('set').description('Update your saved policy; personal credential required')).action(setLimits);
+configureLimits(program.command('limits').description('Show or change your saved agent limits (not yet enforced)'))
+  .action(async (options: LimitOptions) => {
+    if ([options.tokens, options.tokenLimit, options.models, options.control].some((value) => value !== undefined)) return setLimits(options);
+    policyOutput(await (await client()).policy(await selectedClan(options)));
   });
 const readText = async () => {
   if (process.stdin.isTTY) throw new Error('Pipe context text on standard input');
@@ -182,10 +196,13 @@ const readText = async () => {
   return Buffer.concat(chunks).toString('utf8');
 };
 const agent = program.command('agent').description('Register agents and inspect their identity');
-agent.command('connect').requiredOption('--name <name>', 'agent name').option('--clan <id>', 'clan ID')
+agent.command('add [name]').alias('connect').description('Register an agent under your identity')
+  .option('--name <name>', 'agent name (alternative to positional name)').option('--clan <id>', 'clan ID')
   .option('--orchestrator', 'register the clan orchestrator (leader only, one per clan)')
-  .action(async (options: { name: string; clan?: string; orchestrator?: boolean }) => {
-    const result = await (await client()).registerAgent(await selectedClan(options), options.name, options.orchestrator ? 'orchestrator' : 'worker');
+  .action(async (name: string | undefined, options: { name?: string; clan?: string; orchestrator?: boolean }) => {
+    if (name !== undefined && options.name !== undefined && name !== options.name) throw new Error('Provide one agent name');
+    const registration = registerAgentSchema.parse({ name: name ?? options.name, role: options.orchestrator ? 'orchestrator' : 'worker' });
+    const result = await (await client()).registerAgent(await selectedClan(options), registration.name, registration.role);
     output(result, `Registered ${result.agent.name} (${result.agent.id})\nToken (shown once): ${result.token}\nConfigure CLQN_TOKEN and CLQN_CLAN_ID in your agent environment, then run clqn mcp.`);
   });
 agent.command('list').option('--clan <id>', 'clan ID').action(async (options: { clan?: string }) => {
@@ -222,14 +239,16 @@ const describeTask = (value: Task) => `${value.id}  ${value.status}  ${value.des
   (value.assignedAgentId ? `\nAssigned agent: ${value.assignedAgentId}` : '') +
   (value.repository ? `\nRepository: ${value.repository.slug}  branch=${value.repository.branch}  base=${value.repository.baseSha}` +
     `\nIntegration: ${value.repository.state}${value.repository.prUrl ? `  ${value.repository.prUrl}` : ''}` : '');
-task.command('add <description>').option('--clan <id>', 'clan ID')
+task.command('add <description>').description('Create a task; add --code for work in this repository').option('--clan <id>', 'clan ID')
+  .option('--code', 'use this GitHub clone, the latest origin/main, and an automatic task branch')
   .option('--repo <owner/repo>', 'GitHub repository')
   .option('--base-sha <sha>', 'full starting commit SHA on the remote base branch')
   .option('--base-branch <branch>', 'target branch (defaults to main)')
   .option('--branch <branch>', 'unique task branch')
-  .action(async (description: string, options: { clan?: string; repo?: string; baseSha?: string; baseBranch?: string; branch?: string }) => {
+  .action(async (description: string, options: { clan?: string; code?: boolean; repo?: string; baseSha?: string; baseBranch?: string; branch?: string }) => {
     const hasRepository = [options.repo, options.baseSha, options.baseBranch, options.branch].some((value) => value !== undefined);
-    const repository = hasRepository ? repositoryInputSchema.parse({ slug: options.repo, baseSha: options.baseSha,
+    if (options.code && hasRepository) throw new Error('Use --code for defaults, or explicit repository flags');
+    const repository = options.code ? await repositoryForNewTask() : hasRepository ? repositoryInputSchema.parse({ slug: options.repo, baseSha: options.baseSha,
       baseBranch: options.baseBranch ?? 'main', branch: options.branch }) : undefined;
     const result = await (await client()).createTask(await selectedClan(options), description, repository);
     output(result, describeTask(result));
@@ -270,7 +289,30 @@ const requireCoordinator = async (api: ClqnClient, clanId: string) => {
   } else if ((await api.members(clanId)).members.some((member) => member.userId === actor.id && member.role === 'leader')) return;
   throw new Error('Only the clan leader or its registered orchestrator can integrate tasks');
 };
-task.command('prepare <id>').description('Fetch and create an isolated worktree at the assigned base commit')
+task.command('start <id>').description('Claim a task and open its worktree, choosing a directory automatically')
+  .option('--from <directory>', 'source clone (defaults to current directory)', '.')
+  .option('--path <directory>', 'task directory (defaults to a sibling of the clone)').option('--clan <id>', 'clan ID')
+  .action(async (id: string, options: { clan?: string; from: string; path?: string }) => {
+    const api = await client(); const clanId = await selectedClan(options);
+    let value = await api.task(clanId, id);
+    const actor = await api.whoami();
+    if (value.status !== 'open' && (value.status !== 'claimed' || value.ownerId !== actor.id || value.ownerAgentId !== (actor.agentId ?? null))) {
+      throw new Error('Task must be open or already claimed with the same credential');
+    }
+    if (value.repository?.state === 'merged') throw new Error('Task is already integrated; use task done');
+    // Check the selected local repository before claiming code work.
+    const location = value.repository ? await taskWorktreeLocation({ repoPath: options.from, taskId: value.id,
+      repository: value.repository, ...(options.path === undefined ? {} : { path: options.path }) }) : null;
+    if (value.status === 'open') value = await api.transitionTask(clanId, id, 'claim');
+    if (!value.repository || !location) { output(value, describeTask(value)); return; }
+    try {
+      const prepared = await openTaskWorktree({ ...location, repository: value.repository });
+      output({ task: value, ...prepared }, `Started ${value.id}\nWork in: ${prepared.path}\nBranch: ${prepared.branch}`);
+    } catch (error) {
+      throw new Error(`Task ${id} is claimed, but its worktree could not be opened. Retry task start after resolving the local issue. ${error instanceof Error ? error.message : 'Git operation failed'}`);
+    }
+  });
+task.command('prepare <id>', { hidden: true }).description('Fetch and create an isolated worktree at the assigned base commit')
   .requiredOption('--path <directory>', 'new worktree directory outside your checkout')
   .option('--repo-path <directory>', 'existing local clone', '.').option('--clan <id>', 'clan ID')
   .action(async (id: string, options: { clan?: string; path: string; repoPath: string }) => {
@@ -279,8 +321,8 @@ task.command('prepare <id>').description('Fetch and create an isolated worktree 
     const result = await prepareWorktree({ repoPath: options.repoPath, worktreePath: options.path, repository });
     output({ taskId: id, ...result }, `Prepared ${result.path}\nBranch: ${result.branch}\nBase: ${result.baseSha}`);
   });
-task.command('publish <id>').description('Push committed work, create or reuse a PR, and report it to the clan')
-  .requiredOption('--path <directory>', 'task worktree directory').option('--body <text>', 'pull request description')
+task.command('submit <id>').alias('publish').description('Push committed work, create or reuse a PR, and report it to the clan')
+  .option('--path <directory>', 'task worktree directory (defaults to current directory)', '.').option('--body <text>', 'pull request description')
   .option('--clan <id>', 'clan ID')
   .action(async (id: string, options: { clan?: string; path: string; body?: string }) => {
     const api = await client(); const clanId = await selectedClan(options);
@@ -301,7 +343,7 @@ task.command('check <id>').description('Inspect the task PR and checks on GitHub
     output({ taskId: id, ...result }, `${result.url}\n${result.state}  checks=${result.checksPassed ? 'passed' : 'not passed'}\nHead: ${result.headSha}`);
   });
 for (const action of ['merge', 'integrate'] as const) {
-  task.command(`${action} <id>`).description(action === 'merge'
+  task.command(`${action} <id>`, { hidden: action === 'integrate' }).description(action === 'merge'
     ? 'Merge a passing PR as leader/orchestrator and record confirmed integration'
     : 'Verify an already merged PR and record its merge commit')
     .option('--clan <id>', 'clan ID')
@@ -316,7 +358,7 @@ for (const action of ['merge', 'integrate'] as const) {
         ? await mergePullRequest({ repository, prNumber: repository.prNumber, headSha: repository.headSha })
         : await inspectPullRequest({ repository, prNumber: repository.prNumber });
       if (result.state !== 'MERGED' || !result.mergeCommitSha) {
-        throw new Error('PR is not confirmed merged. Run task check and retry task integrate after GitHub completes the merge');
+        throw new Error('PR is not confirmed merged. Run task check and retry task merge after GitHub completes the merge');
       }
       if (result.headSha !== repository.headSha) throw new Error('PR head changed; the task owner must publish and report the latest commit');
       const integrated = await api.integrateTask(clanId, id, { headSha: result.headSha, mergeCommitSha: result.mergeCommitSha });
@@ -324,7 +366,9 @@ for (const action of ['merge', 'integrate'] as const) {
     });
 }
 for (const action of ['claim', 'release', 'complete'] as const) {
-  task.command(`${action} <id>`).option('--clan <id>', 'clan ID').action(async (id: string, options: { clan?: string }) => {
+  const command = task.command(`${action === 'complete' ? 'done' : action} <id>`, { hidden: action === 'claim' });
+  if (action === 'complete') command.alias('complete');
+  command.option('--clan <id>', 'clan ID').action(async (id: string, options: { clan?: string }) => {
     const result = await (await client()).transitionTask(await selectedClan(options), id, action);
     output(result, `${result.id}: ${result.status}`);
   });

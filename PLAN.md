@@ -64,7 +64,7 @@ Target MVP commands are below; unchecked roadmap items are not available yet.
 
 ```bash
 # Authentication
-clqn login --token-stdin
+clqn login
 clqn logout
 clqn whoami
 
@@ -77,8 +77,8 @@ clqn members
 clqn status
 
 # Agent integration
-clqn agent connect --name Codex
-clqn agent connect --name Coordinator --orchestrator
+clqn agent add Codex
+clqn agent add Coordinator --orchestrator
 clqn agent list
 clqn agent status
 
@@ -89,22 +89,20 @@ clqn context write <key>
 clqn context history <key>
 
 # Task coordination
-clqn task add "<description>"
+clqn task add "<description>" --code
 clqn task list
 clqn task show <id>
 clqn task assign <id> --agent <id>
 clqn task unassign <id> --agent <id>
-clqn task prepare <id> --repo-path <clone> --path <new-worktree>
-clqn task publish <id> --path <worktree>
+clqn task start <id>
+clqn task submit <id>
 clqn task check <id>
 clqn task merge <id>
-clqn task integrate <id>
-clqn task claim <id>
 clqn task release <id>
-clqn task complete <id>
+clqn task done <id>
 
 # Local main synchronization
-clqn repo sync --repo <owner/repo> --repo-path <clone> --watch
+clqn sync --watch
 
 # Activity and metrics
 clqn watch
@@ -193,7 +191,9 @@ Implement:
 
 **Repository coordination slice:** Implemented a permanent designated orchestrator role, worker assignments and compare-and-clear unassignment, task repository/base SHA/branch references, isolated local worktree preparation, non-force publication, exact-head PR checks and squash merge, confirmed integration reports, and ownership-gated completion. API and MCP remain adapters around server-side authorization; Git and `gh` operate locally. See [repository workflow](docs/repositories.md).
 
-**Main-only automatic sync:** Implemented `clqn repo sync --watch` as a local foreground polling command. Fetch only `origin/main`, and fast-forward only the selected clean main checkout. Skip dirty, diverged, locally ahead, or non-main checkouts; never automatically update task branches/worktrees. Polling errors retry. Sync does not launch agents or update task integration records.
+**Main-only automatic sync:** Implemented `clqn sync --watch` as a local foreground polling command. Fetch only `origin/main`, and fast-forward only the selected clean main checkout. Skip dirty, diverged, locally ahead, or non-main checkouts; never automatically update task branches/worktrees. Polling errors retry. Sync does not launch agents or update task integration records.
+
+**Simple CLI:** Infer the repository and checkout from the current directory. `task add --code` records the latest origin/main and chooses a unique branch; `task start` claims work and chooses or resumes a task worktree; `task submit` uses the current worktree; `task done` completes it. Use `agent add <name>` and `limits --tokens <number>`. Older names remain compatible, with explicit overrides documented in the [command reference](docs/commands.md). API and MCP contracts stay unchanged.
 
 **Execution boundary:** Registration does not launch or keep model processes running. Existing agent runtimes invoke these tools. Member token/model/control policies are persisted, but hard usage enforcement and execution approvals still need metering and a runner. DMs/group chats, unattended scheduling, automatic webhook ingestion, and conflict resolution are not implemented.
 

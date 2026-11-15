@@ -62,7 +62,6 @@ test('repository acceptance: orchestrator delegates, worker publishes isolated w
   const remote = join(root, 'remote.git');
   const personal = join(root, 'personal');
   const integrator = join(root, 'integrator');
-  const worktree = join(root, 'task-worktree');
   const nextWorktree = join(root, 'next-worktree');
   const bin = join(root, 'bin');
   const prFile = join(root, 'pr.json');
@@ -130,23 +129,29 @@ else if(args[1] === 'merge' && pr) {
 } else process.exit(3);
 `, { mode: 0o755 });
   const cliEnv = { ...env, PATH: `${bin}:${process.env.PATH}` };
-  const call = async (token, args) => JSON.parse((await execute(process.execPath,
-    [cli, '--api-url', apiUrl, '--json', ...args], { env: { ...cliEnv, CLQN_TOKEN: token }, encoding: 'utf8' })).stdout);
+  const call = async (token, args, cwd = personal) => JSON.parse((await execute(process.execPath,
+    [cli, '--api-url', apiUrl, '--json', ...args], { env: { ...cliEnv, CLQN_TOKEN: token }, cwd, encoding: 'utf8' })).stdout);
 
-  const task = await call(orchestrator.token, ['task', 'add', 'Implement shared feature', '--repo', 'test/project',
-    '--base-sha', baseSha, '--base-branch', 'main', '--branch', 'clqn/acceptance-feature']);
+  const task = await call(orchestrator.token, ['task', 'add', 'Implement shared feature', '--code']);
+  assert.equal(task.repository.slug, 'test/project');
+  assert.equal(task.repository.baseSha, baseSha);
+  assert.match(task.repository.branch, /^clqn\/task-[a-f0-9-]+$/);
   assert.equal((await call(orchestrator.token, ['task', 'assign', task.id, '--agent', worker.agent.id])).assignedAgentId, worker.agent.id);
-  assert.equal((await call(worker.token, ['task', 'claim', task.id])).ownerAgentId, worker.agent.id);
-  const prepared = await call(worker.token, ['task', 'prepare', task.id, '--repo-path', personal, '--path', worktree]);
+  const prepared = await call(worker.token, ['task', 'start', task.id]);
+  const worktree = prepared.path;
+  assert.equal(prepared.task.ownerAgentId, worker.agent.id);
   assert.equal(prepared.baseSha, baseSha);
   assert.equal(await git(worktree, ['rev-parse', 'HEAD']), baseSha);
   await writeFile(join(worktree, 'feature.txt'), 'finished task\n');
+  const resumed = await call(worker.token, ['task', 'start', task.id], worktree);
+  assert.equal(resumed.path, worktree);
+  assert.equal(await readFile(join(worktree, 'feature.txt'), 'utf8'), 'finished task\n');
   await git(worktree, ['add', 'feature.txt']); await git(worktree, ['commit', '-m', 'Implement feature']);
   const headSha = await git(worktree, ['rev-parse', 'HEAD']);
-  const published = await call(worker.token, ['task', 'publish', task.id, '--path', worktree, '--body', 'Feature tested']);
+  const published = await call(worker.token, ['task', 'submit', task.id, '--body', 'Feature tested'], worktree);
   assert.equal(published.repository.headSha, headSha);
   assert.equal(published.repository.prUrl, 'https://github.com/test/project/pull/7');
-  assert.equal(await git(remote, ['rev-parse', 'refs/heads/clqn/acceptance-feature']), headSha);
+  assert.equal(await git(remote, ['rev-parse', `refs/heads/${task.repository.branch}`]), headSha);
   const check = await call(orchestrator.token, ['task', 'check', task.id]);
   assert.equal(check.checksPassed, true);
   const merged = await call(orchestrator.token, ['task', 'merge', task.id]);
@@ -154,7 +159,7 @@ else if(args[1] === 'merge' && pr) {
   assert.notEqual(mergedSha, headSha, 'Fixture performs an actual squash merge');
   assert.equal(merged.repository.state, 'merged');
   assert.equal(merged.repository.mergeCommitSha, mergedSha);
-  assert.equal((await call(worker.token, ['task', 'complete', task.id])).status, 'completed');
+  assert.equal((await call(worker.token, ['task', 'done', task.id])).status, 'completed');
   const stored = await call(orchestrator.token, ['task', 'show', task.id]);
   assert.equal(stored.status, 'completed');
   assert.equal(stored.repository.headSha, headSha);

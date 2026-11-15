@@ -12,24 +12,24 @@ Existing clan and task permissions stay in effect. For example, a leader can sti
 
 ```sh
 # Read your policy in the selected clan.
-npm run cli -- policy show --json
+clqn limits --json
 
 # Save a cap and an exact model allowlist. Replace the example model identifiers.
-npm run cli -- policy set --token-limit 100000 --models provider/model-a provider/model-b --control approve
+clqn limits --tokens 100000 --models provider/model-a provider/model-b --control approve
 
 # Select another clan for this command.
-npm run cli -- policy show --clan <clan-id>
+clqn limits --clan <clan-id>
 
 # Withdraw permission for the leader to start work.
-npm run cli -- policy set --control manual
+clqn limits --control manual
 
 # Remove the cap and model restriction. Keep the current control level.
-npm run cli -- policy set --token-limit none --models any
+clqn limits --tokens none --models any
 ```
 
 | Setting | Meaning for a future runner | Default |
 | --- | --- | --- |
-| `--token-limit <tokens>` | Total input plus output tokens across your agents in this clan. Nonnegative integer; `0` requests no usage. The cap has no time window or automatic reset. | `none` (no cap) |
+| `--tokens <tokens>` | Total input plus output tokens across your agents in this clan. Nonnegative integer; `0` requests no usage. The cap has no time window or automatic reset. | `none` (no cap) |
 | `--models <ids...>` | Exact, case-sensitive model identifiers separated by spaces. `any` removes the restriction. Model availability is not checked. | `any` |
 | `--control manual` | You start work. The leader cannot start your agents. | `manual` |
 | `--control approve` | The leader requests work. You approve each request before execution. | — |
@@ -41,7 +41,7 @@ Each update preserves unspecified settings. Removing a token cap does not reset 
 
 Only a member's personal credential can change their own policy. Agent credentials can read their owner's policy for their registered clan. There is no route to change another member's policy, including for leaders.
 
-The CLI reads the current revision before it submits a change. The API checks that revision while holding a lock on the membership row. If another update has committed, it returns `409 REVISION_CONFLICT`. Run `policy show`, review the change, then try again.
+The CLI reads the current revision before it submits a change. The API checks that revision while holding a lock on the membership row. If another update has committed, it returns `409 REVISION_CONFLICT`. Run `clqn limits`, review the change, then try again.
 
 An audit event named `policy.updated` commits in the same transaction as each successful update. Rejected updates do not produce an event.
 
