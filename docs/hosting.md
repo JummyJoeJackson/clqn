@@ -14,9 +14,41 @@ printf '%s' '<token>' | clqn --api-url http://127.0.0.1:8080 login
 
 The second command prints a one-time personal token; deliver tokens privately. Rerun the first command after pulling updates; it rebuilds the image and applies new migrations.
 
-Set `POSTGRES_PASSWORD`, `GITHUB_CLIENT_ID` ([GitHub login](authentication.md)), and `GITHUB_WEBHOOK_SECRET` ([webhooks](webhooks.md)) in a private `.env` file next to `docker-compose.yml` to configure them. Set `POSTGRES_PASSWORD` before the first start; the database keeps its original password afterward.
+Set `POSTGRES_PASSWORD`, `GITHUB_CLIENT_ID` ([GitHub login](#github-oauth-app)), and `GITHUB_WEBHOOK_SECRET` ([webhooks](#webhook-server-setup)) in a private `.env` file next to `docker-compose.yml` to configure them. Set `POSTGRES_PASSWORD` before the first start; the database keeps its original password afterward.
 
 Authenticated clients require HTTPS except on loopback. To share the API with teammates, put a TLS reverse proxy in front of port 8080, for example `caddy reverse-proxy --from clqn.example.com --to 127.0.0.1:8080`, and give them the HTTPS URL. Back up the `pgdata` volume.
+
+## Provision user credentials
+
+Set `DATABASE_URL` in the root `.env`, then run:
+
+```sh
+npm run db:migrate
+npm run user -- create alice@example.com
+npm run user -- revoke <credential-id>
+```
+
+Creation prints `user`, `credentialId`, and a one-time `token`. Deliver the token privately and keep the credential ID for revocation. Repeating creation issues another credential without revoking earlier ones. Operator-supplied email addresses are identity labels, not verified addresses.
+
+Tokens do not expire automatically. Revocation blocks subsequent requests; a request already authenticated may finish. Database access stays server-side.
+
+## Webhook server setup
+
+Run `npm run db:migrate`. Set server-only `GITHUB_WEBHOOK_SECRET` to a high-entropy key of at least 32 characters; generate one with `openssl rand -hex 32`. Keep it consistent across instances and restarts, in a private environment or [GCP Secret Manager](#github-webhook-secret).
+
+Expose `POST /hooks/github/:link-id` at a stable public HTTPS URL. It verifies `X-Hub-Signature-256` over the raw body instead of requiring a bearer token. `/v1` routes retain normal authentication.
+
+Without the key, linking and delivery return `503 WEBHOOK_UNAVAILABLE`; other features and Git fallback remain available. A shorter configured key prevents startup. Each repository/clan link gets a derived secret; signing keys are never stored in PostgreSQL or client settings.
+
+Rotating the root key changes every link secret. Update all API instances, then rerun `repo link` for every repository/clan link. Old signatures fail during rotation; fallback fetches recover missed changes.
+
+## GitHub OAuth App
+
+Create a dedicated GitHub OAuth App with **Device Flow** enabled. Set its homepage to the project site and required callback URL to the API origin; device flow uses no callback route. Set `GITHUB_CLIENT_ID` on the API and apply migrations before deployment. Users then sign in as described in [GitHub device login](authentication.md#github-device-login). No client secret or repository permissions are needed. Leave the ID unset to disable new logins.
+
+Enabling login allows any qualifying GitHub user to create an account, but grants no clan membership. The API has process-local admission and polling limits, including 10 login starts per minute per client address (the last `X-Forwarded-For` entry, which Cloud Run sets). Behind an additional load balancer, that entry is the balancer, so clients share one limit. Configure edge rate limits before broad public signup. Keep authentication bodies out of logs.
+
+Public endpoints: `POST /auth/github/start` and `POST /auth/github/poll`; send the polling handle in the JSON body. See [GitHub's device-flow documentation](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow).
 
 ## Cloud Run on GCP
 
@@ -116,11 +148,11 @@ Allow public `/hooks/github/*` requests through to the API; GitHub signatures au
 
 ## Verify a deployment
 
-`GET /health` checks process liveness only; `GET /ready` returns `503` until the database answers, so use it for load balancer or startup probes. Every response carries an `X-Request-Id` header, and a `500` message repeats it; the API writes one JSON line per failure with that ID, the method, and the route pattern, never request bodies or credentials. Test authenticated `whoami`, membership, context, and tasks. Run the [two-person acceptance check](authentication.md#manual-acceptance-check) to verify cloud networking, webhooks, and real agent settings.
+`GET /health` checks process liveness only; `GET /ready` returns `503` until the database answers, so use it for load balancer or startup probes. Every response carries an `X-Request-Id` header, and a `500` message repeats it; the API writes one JSON line per failure with that ID, the method, and the route pattern, never request bodies or credentials. Test authenticated `whoami`, membership, context, and tasks. Run the [two-person acceptance check](#manual-acceptance-check) to verify cloud networking, webhooks, and real agent settings.
 
 ## Enable GitHub login
 
-Follow [OAuth App setup](authentication.md#operator-setup). Build a new image, run its migrations, and deploy it before setting the public client ID:
+Follow [OAuth App setup](#github-oauth-app). Build a new image, run its migrations, and deploy it before setting the public client ID:
 
 ```sh
 gcloud run services update clqn-api \
@@ -129,3 +161,16 @@ gcloud run services update clqn-api \
 ```
 
 No client secret is needed. Keep database and webhook settings intact. Unset `GITHUB_CLIENT_ID` to disable new logins; existing clqn tokens remain valid until revoked. Test login, invitations, and revocation. Do not log authentication request/response bodies.
+
+## Manual acceptance check
+
+Before relying on a deployment, test on separate machines with real Codex and Claude Code applications:
+
+1. Sign in as two people; create a clan, invite, and join.
+2. Register each agent and configure its own scoped token.
+3. Share context, update it, inspect history, and confirm stale revisions fail.
+4. Assign, claim, submit, merge, and complete a code task. Confirm other actors cannot claim assigned work or complete it; test owner and leader release.
+5. Check `status`, `log`, live webhook delivery, clean-main sync, and missed-delivery fallback.
+6. Confirm agent access to another clan and personal-only operations fails. Revoke a test token and confirm its next request fails.
+
+Record application versions and setup issues. Automated MCP tests simulate clients; they do not validate real application settings or cloud networking.

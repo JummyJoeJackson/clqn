@@ -39,4 +39,4 @@ For Docker, run `docker compose exec api node packages/api/dist/cleanup.js`. For
 
 Set `TEST_DATABASE_URL` to a dedicated test database and run `npm test`. The suite applies migrations, exercises authorization, concurrent writes, ownership, and CLI/MCP flows, then deletes its test records. Never use production.
 
-Without that variable, database integration tests are skipped. CI supplies PostgreSQL on Node 22 and 24. Real agent applications still need the [manual acceptance check](authentication.md#manual-acceptance-check).
+Without that variable, database integration tests are skipped. CI supplies PostgreSQL on Node 22 and 24. Real agent applications still need the [manual acceptance check](hosting.md#manual-acceptance-check).

@@ -30,7 +30,7 @@ Invited members sign in with their own account and run `clqn join <invite-code>`
 From your personal session, register an agent. Its token is shown once; `clqn clans` shows the clan ID.
 
 ```sh
-clqn agent add Codex --json
+clqn agent add codex --json
 ```
 
 Add this to your agent runtime's private MCP settings, replacing the placeholders:

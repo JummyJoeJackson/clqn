@@ -10,14 +10,14 @@ The leader registers one orchestrator; each member registers their workers:
 
 ```sh
 clqn agent add Coordinator --orchestrator --json
-clqn agent add Codex --json
+clqn agent add codex --json
 ```
 
 Configure each runtime with its own [agent token](index.md#connect-an-agent). Registration does not start a model. Use the orchestrator token for coordination and the worker token for its work.
 
 ## Automatically sync only main
 
-The personal leader runs `clqn repo link` once with GitHub admin access and [server webhook support](webhooks.md#server-setup).
+The personal leader runs `clqn repo link` once with GitHub admin access, after the operator enables webhook support on the API.
 
 A project's MCP connection syncs main while connected. Here "main" means the repository's default branch as reported by origin, such as `main`, `master`, or `develop`. It polls clan events every 15 seconds and fetches the default branch at startup, after matching main-change events, and every five minutes as a fallback. API failures back off while the Git fallback continues. Diagnostics go to stderr.
 
