@@ -13,6 +13,6 @@
   "dependencies": {
     "@clqn/shared": "0.1.2",
     "@clqn/mcp": "0.1.2",
-    "commander": "^14.0.0"
+    "commander": "^15.1.0"
   }
 }
