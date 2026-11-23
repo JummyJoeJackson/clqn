@@ -55,9 +55,11 @@ Changes to `website/download.html` ship through the [website deployment](#websit
 
 ## API deployment
 
-The same `v*` tag deploys the API after checks pass. The `deploy-api` job builds `clqn-api:<tag>`, runs the `clqn-migrate` job with it, updates the `clqn-api` Cloud Run service and the `clqn-cleanup` job to the same image, and checks `/ready`. Cloud Scheduler job `clqn-cleanup-daily` runs `clqn-cleanup` at 09:00 UTC. Existing env vars, secrets, and network settings are kept.
+A stable `vX.Y.Z` tag on a commit on `main` deploys the API after checks pass. The `deploy-api` job builds `clqn-api:<tag>`, runs the `clqn-migrate` job with it, updates the `clqn-api` Cloud Run service to the same image, and verifies that the new revision serves all traffic and answers `/ready`. Existing env vars, secrets, and network settings are kept.
 
-GitHub authenticates through Workload Identity Federation (pool and provider `github`, limited to `rli8145/clqn`) as `clqn-deployer`, which holds Cloud Run Developer, Artifact Registry Writer, and permission to act as `clqn-api`. No key is stored in GitHub. Under GitHub **Settings → Environments**, create `api-production` and allow deployments from tags matching `v*`. To roll back, run `gcloud run services update-traffic clqn-api --to-revisions <previous-revision>=100`; migrations are not reversed, so keep them additive.
+GitHub authenticates through Workload Identity Federation (pool and provider `github`, limited to `rli8145/clqn`) as `clqn-deployer`, which holds Cloud Run Developer, Artifact Registry Writer, and permission to act as `clqn-api`. No key is stored in GitHub. Under GitHub **Settings → Environments**, create `api-production` and allow deployments from tags matching `v*`. To roll back, run `gcloud run services update-traffic clqn-api --to-revisions <previous-revision>=100`; migrations are not reversed, so keep them additive. Cloud Run preserves pinned traffic on later deployments. When you are ready to resume deployments, restore automatic traffic routing with `gcloud run services update-traffic clqn-api --to-latest`.
+
+Before releasing, confirm the existing `clqn-cleanup` Cloud Run job runs through the `clqn-cleanup-daily` Cloud Scheduler trigger at 09:00 UTC. After the API readiness check, the deploy job updates `clqn-cleanup` to the same release image.
 
 ## Website deployment
 
@@ -65,4 +67,4 @@ After the Node.js 22 and 24 checks pass on the current `main` of `rli8145/clqn`,
 
 Under GitHub **Settings → Environments**, create `website-production`, restrict deployment branches to `main`, and add an environment secret named `VERCEL_TOKEN`. Use a dedicated token scoped to the Vercel team with permission to deploy the existing project. The workflow includes the nonsecret team and project IDs. [Vercel's GitHub Actions guide](https://vercel.com/kb/guide/how-can-i-use-github-actions-with-vercel)
 
-Select **Actions → CI → Run workflow** on `main` to redeploy. Deployments run one at a time and skip superseded commits. Rerun a failed job within the artifact's seven-day retention period, or start a fresh workflow. To roll back, revert the site change on `main`.
+Select **Actions → CI/CD → Run workflow** on `main` to redeploy. Deployments run one at a time and skip superseded commits. Rerun a failed job within the artifact's seven-day retention period, or start a fresh workflow. To roll back, revert the site change on `main`.
