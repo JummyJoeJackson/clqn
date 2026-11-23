@@ -189,5 +189,6 @@ jobs:
         run: |
           gcloud run jobs update clqn-migrate --project "$PROJECT" --region "$REGION" --image "$IMAGE" --execute-now --wait
           gcloud run services update clqn-api --project "$PROJECT" --region "$REGION" --image "$IMAGE"
+          gcloud run jobs update clqn-cleanup --project "$PROJECT" --region "$REGION" --image "$IMAGE"
       - name: Check readiness
         run: curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 20 https://clqn-api-660379279615.us-central1.run.app/ready
