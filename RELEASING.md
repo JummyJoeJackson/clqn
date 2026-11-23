@@ -1,6 +1,6 @@
 # Releasing
 
-Maintainer notes for publishing the CLI and deploying clqn.org. To run your own API, see [GCP hosting](docs/hosting.md).
+Maintainer notes for publishing the CLI and deploying the API and clqn.org. To run your own API, see [GCP hosting](docs/hosting.md).
 
 ## CLI release
 
@@ -52,6 +52,12 @@ brew test rli8145/clqn/clqn
 ```
 
 Changes to `website/download.html` ship through the [website deployment](#website-deployment) after checks pass on `main`.
+
+## API deployment
+
+The same `v*` tag deploys the API after checks pass. The `deploy-api` job builds `clqn-api:<tag>`, runs the `clqn-migrate` job with it, updates the `clqn-api` Cloud Run service to the same image, and checks `/ready`. Existing env vars, secrets, and network settings are kept.
+
+GitHub authenticates through Workload Identity Federation (pool and provider `github`, limited to `rli8145/clqn`) as `clqn-deployer`, which holds Cloud Run Developer, Artifact Registry Writer, and permission to act as `clqn-api`. No key is stored in GitHub. Under GitHub **Settings → Environments**, create `api-production` and allow deployments from tags matching `v*`. To roll back, run `gcloud run services update-traffic clqn-api --to-revisions <previous-revision>=100`; migrations are not reversed, so keep them additive.
 
 ## Website deployment
 
