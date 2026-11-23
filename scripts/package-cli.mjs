@@ -55,7 +55,7 @@ await writeFile(
       repository: { type: 'git', url: 'git+https://github.com/rli8145/clqn.git' },
       bugs: { url: 'https://github.com/rli8145/clqn/issues' },
       keywords: ['cli', 'mcp', 'agents', 'collaboration'],
-      engines: { node: '>=22' },
+      engines: { node: '>=22.12.0' },
       bin: { clqn: 'clqn.mjs' },
       files: ['clqn.mjs', 'THIRD_PARTY_LICENSES.txt'],
       publishConfig: { access: 'public' },
