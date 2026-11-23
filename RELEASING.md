@@ -55,9 +55,9 @@ Changes to `website/download.html` ship through the [website deployment](#websit
 
 ## API deployment
 
-The same `v*` tag deploys the API after checks pass. The `deploy-api` job builds `clqn-api:<tag>`, runs the `clqn-migrate` job with it, updates the `clqn-api` Cloud Run service to the same image, and checks `/ready`. Existing env vars, secrets, and network settings are kept.
+A stable `vX.Y.Z` tag on a commit on `main` deploys the API after checks pass. The `deploy-api` job builds `clqn-api:<tag>`, runs the `clqn-migrate` job with it, updates the `clqn-api` Cloud Run service to the same image, and verifies that the new revision serves all traffic and answers `/ready`. Existing env vars, secrets, and network settings are kept.
 
-GitHub authenticates through Workload Identity Federation (pool and provider `github`, limited to `rli8145/clqn`) as `clqn-deployer`, which holds Cloud Run Developer, Artifact Registry Writer, and permission to act as `clqn-api`. No key is stored in GitHub. Under GitHub **Settings → Environments**, create `api-production` and allow deployments from tags matching `v*`. To roll back, run `gcloud run services update-traffic clqn-api --to-revisions <previous-revision>=100`; migrations are not reversed, so keep them additive.
+GitHub authenticates through Workload Identity Federation (pool and provider `github`, limited to `rli8145/clqn`) as `clqn-deployer`, which holds Cloud Run Developer, Artifact Registry Writer, and permission to act as `clqn-api`. No key is stored in GitHub. Under GitHub **Settings → Environments**, create `api-production` and allow deployments from tags matching `v*`. To roll back, run `gcloud run services update-traffic clqn-api --to-revisions <previous-revision>=100`; migrations are not reversed, so keep them additive. Cloud Run preserves pinned traffic on later deployments. When you are ready to resume deployments, restore automatic traffic routing with `gcloud run services update-traffic clqn-api --to-latest`.
 
 ## Website deployment
 
