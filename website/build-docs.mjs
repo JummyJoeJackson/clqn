@@ -8,9 +8,10 @@ const guides = [
   ['repositories', 'Repository workflow'],
   ['webhooks', 'GitHub webhooks'],
   ['policies', 'Agent policies'],
-  ['database', 'Database setup'],
-  ['hosting', 'Hosting'],
 ];
+// Operator guides (hosting, database) stay in the repository, not on the user site.
+const published = new Set(guides.map(([slug]) => slug));
+const repositoryDocs = 'https://github.com/rli8145/clqn/blob/main/docs/';
 
 // Only repository-authored Markdown enters this build. Render it once so the
 // published pages and their fragment links work even with JavaScript disabled.
@@ -28,7 +29,10 @@ const markdown = new Marked({
   walkTokens(token) {
     if (token.type !== 'link') return;
     if (token.href === '../README.md#installation') token.href = '../download.html';
-    else token.href = token.href.replace(/^([\w-]+)\.md(?=#|$)/, '$1.html');
+    else
+      token.href = token.href.replace(/^([\w-]+)\.md(?=#|$)/, (_, slug) =>
+        published.has(slug) ? `../docs/${slug}.html` : `${repositoryDocs}${slug}.md`,
+      );
   },
 });
 
@@ -39,7 +43,8 @@ export async function buildDocs(source, output) {
     const canonicalPath = slug === 'index' ? '/docs/' : `/docs/${slug}.html`;
     const links = guides.map(([page, name]) => {
       const current = page === slug ? ' aria-current="page"' : '';
-      return `<li><a href="${page}.html"${current}>${name}</a></li>`;
+      // Hosts also serve the index at /docs without a slash, so name the folder explicitly.
+      return `<li><a href="../docs/${page}.html"${current}>${name}</a></li>`;
     });
     const page = `<!doctype html>
 <html lang="en">
