@@ -7,7 +7,7 @@ Thanks for helping with clqn. It's a lightweight, CLI-first tool, so we favor sm
 
 ## Prerequisites
 
-- Node.js 22+ and npm 10+
+- Node.js 22.12+ and npm 10+
 - Docker, for the local PostgreSQL database
 
 ## Set up
