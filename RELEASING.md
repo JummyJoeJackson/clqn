@@ -59,6 +59,8 @@ A stable `vX.Y.Z` tag on a commit on `main` deploys the API after checks pass. T
 
 GitHub authenticates through Workload Identity Federation (pool and provider `github`, limited to `rli8145/clqn`) as `clqn-deployer`, which holds Cloud Run Developer, Artifact Registry Writer, and permission to act as `clqn-api`. No key is stored in GitHub. Under GitHub **Settings → Environments**, create `api-production` and allow deployments from tags matching `v*`. To roll back, run `gcloud run services update-traffic clqn-api --to-revisions <previous-revision>=100`; migrations are not reversed, so keep them additive. Cloud Run preserves pinned traffic on later deployments. When you are ready to resume deployments, restore automatic traffic routing with `gcloud run services update-traffic clqn-api --to-latest`.
 
+Before releasing, confirm the existing `clqn-cleanup` Cloud Run job runs through the `clqn-cleanup-daily` Cloud Scheduler trigger at 09:00 UTC. After the API readiness check, the deploy job updates `clqn-cleanup` to the same release image.
+
 ## Website deployment
 
 After the Node.js 22 and 24 checks pass on the current `main` of `rli8145/clqn`, GitHub Actions deploys the tested static site to the Vercel project `andy-zhang-s-projects2/clqn`. It compares the public homepage, download page, docs index, and logo with the build.
