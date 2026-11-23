@@ -65,4 +65,4 @@ After the Node.js 22 and 24 checks pass on the current `main` of `rli8145/clqn`,
 
 Under GitHub **Settings → Environments**, create `website-production`, restrict deployment branches to `main`, and add an environment secret named `VERCEL_TOKEN`. Use a dedicated token scoped to the Vercel team with permission to deploy the existing project. The workflow includes the nonsecret team and project IDs. [Vercel's GitHub Actions guide](https://vercel.com/kb/guide/how-can-i-use-github-actions-with-vercel)
 
-Select **Actions → CI → Run workflow** on `main` to redeploy. Deployments run one at a time and skip superseded commits. Rerun a failed job within the artifact's seven-day retention period, or start a fresh workflow. To roll back, revert the site change on `main`.
+Select **Actions → CI/CD → Run workflow** on `main` to redeploy. Deployments run one at a time and skip superseded commits. Rerun a failed job within the artifact's seven-day retention period, or start a fresh workflow. To roll back, revert the site change on `main`.
