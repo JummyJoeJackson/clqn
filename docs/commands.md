@@ -64,8 +64,9 @@ Use your personal credential to rename an agent you registered. A task’s claim
 | `members transfer <member>` | Hand clan leadership to another member |
 | `clans` / `members` / `agent list` | List participants and workspaces |
 | `agent revoke <agent>` / `agent token <agent>` | Revoke or replace an agent's token |
-| `context list` / `context read <key>` | Browse shared context |
+| `context list` / `context read <key>` / `context history <key>` | Browse shared context and its revisions |
 | `task list` / `task show <id>` | Inspect work; filter with `--status`, `--mine`, and page with `--limit` / `--after` |
+| `task unassign <id> --agent <agent>` | Clear an open assignment (leader or orchestrator) |
 | `task release <id>` | Reopen as claimant or human leader |
 | `limits` | Read saved [policy preferences](policies.md) |
 | `status` | Show member, agent, and task counts |
