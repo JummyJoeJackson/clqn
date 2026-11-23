@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
@@ -152,3 +152,65 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/publish-cli.sh
+
+  deploy-api:
+    needs: check
+    if: github.repository == 'rli8145/clqn' && github.event_name == 'push' && github.event.created && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: api-production
+      url: https://clqn-api-660379279615.us-central1.run.app/ready
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: clqn-api-production
+      queue: max
+    env:
+      PROJECT: clqn-515215
+      REGION: us-central1
+      IMAGE: us-central1-docker.pkg.dev/clqn-515215/clqn/clqn-api:${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the release tag and main ancestry
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Expected a stable vX.Y.Z tag"
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$GITHUB_REF^{commit}")"
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/660379279615/locations/global/workloadIdentityPools/github/providers/github
+          service_account: clqn-deployer@clqn-515215.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Build and push the API image
+        run: |
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+      - name: Migrate the database, then deploy the same image
+        id: deploy
+        run: |
+          gcloud run jobs update clqn-migrate --project "$PROJECT" --region "$REGION" --image "$IMAGE" --execute-now --wait
+          revision=$(gcloud run services update clqn-api --project "$PROJECT" --region "$REGION" --image "$IMAGE" --format='value(status.latestCreatedRevisionName)')
+          test -n "$revision"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - name: Verify the deployed revision and readiness
+        env:
+          REVISION: ${{ steps.deploy.outputs.revision }}
+        run: |
+          if ! gcloud run services describe clqn-api --project "$PROJECT" --region "$REGION" --format=json |
+            jq -e --arg revision "$REVISION" '
+              .status.latestReadyRevisionName == $revision and
+              ([.status.traffic[]? | select(.revisionName == $revision) | .percent // 0] | add // 0) == 100
+            ' >/dev/null; then
+            echo "::error::Cloud Run revision $REVISION is not ready or is not serving 100% of traffic"
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 20 https://clqn-api-660379279615.us-central1.run.app/ready
