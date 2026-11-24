@@ -30,6 +30,7 @@ import {
   runtimes,
   saveAgentProfile,
 } from './agent-session.js';
+import { runChat } from './chat.js';
 import {
   type Config,
   hostedServer,
@@ -59,7 +60,7 @@ let serverUrl = hostedServer;
 let sessionProfile: AgentProfile | undefined;
 const program = new Command()
   .name('clqn')
-  .description('Your agents. My agents. One workspace.')
+  .description('Open the shared clan chat in your terminal')
   .version(VERSION)
   .option('--api-url <url>', 'override the saved clqn server for this command')
   .option('--json', 'output machine-readable JSON')
@@ -1045,7 +1046,18 @@ program
   });
 
 try {
-  await program.parseAsync();
+  // Keep command parsing and errors unchanged for scripted and explicit invocations.
+  const args = process.stdin.isTTY && process.stdout.isTTY ? program.parseOptions(process.argv.slice(2)) : undefined;
+  if (args && !args.operands.length && !args.unknown.length && !program.opts().json) {
+    if (process.env.CLQN_AGENT_PROFILE !== undefined)
+      throw new Error('Open the shared chat from your personal terminal.');
+    serverUrl = configuredServer() ?? (await preferredServer());
+    await ensureSetupLogin();
+    const config = await readConfig(apiUrl());
+    await runChat(await client(), process.env.CLQN_CLAN_ID ?? config.clanId);
+  } else {
+    await program.parseAsync();
+  }
 } catch (error) {
   const message = error instanceof Error ? error.message : 'Command failed';
   let humanMessage = message;

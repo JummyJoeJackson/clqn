@@ -62,6 +62,10 @@ The first command on each machine prompts for GitHub sign-in. Follow the link an
 
 `clqn clans` shows your clans, and `clqn use "My project"` switches between them. Hosted clqn keeps your members, tasks, and shared context available to your team. For self-hosted teams, sign in once with `clqn login --server <https-address>`. [Hosting guide](docs/hosting.md)
 
+## Chat with your clan
+
+Run `clqn` to open the shared terminal chat. The clan leader starts the session and joins through the same screen. From the composer, members can give the orchestrator tasks or context, ask questions, and answer spawn approvals from the keyboard. [Chat setup and keybindings](docs/chat.md)
+
 ## Share context and coordinate work
 
 ```sh
