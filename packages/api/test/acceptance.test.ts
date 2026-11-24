@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, delimiter, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -73,13 +73,19 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   );
   delete baseEnv.CLQN_TOKEN;
   delete baseEnv.CLQN_CLAN_ID;
+  delete baseEnv.CLQN_AGENT_PROFILE;
+  const bin = join(directory, 'bin');
+  await mkdir(bin);
+  const printProfile = '#!/bin/sh\nprintf "%s\n" "$CLQN_AGENT_PROFILE"\n';
+  for (const runtime of ['codex', 'claude']) await writeFile(join(bin, runtime), printProfile, { mode: 0o700 });
+  baseEnv.PATH = [bin, baseEnv.PATH].filter(Boolean).join(delimiter);
   const aliceEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'alice') };
   const bobEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'bob') };
-  const runRaw = async (env: Record<string, string>, args: string[], input?: string) => {
+  const runRaw = async (env: Record<string, string>, args: string[], input?: string, json = true) => {
     const command = promisify(execFile)(
       process.execPath,
-      [...sourceNodeArgs, cliPath, '--api-url', apiUrl, '--json', ...args],
-      { env },
+      [...sourceNodeArgs, cliPath, '--api-url', apiUrl, ...(json ? ['--json'] : []), ...args],
+      { env, cwd: directory },
     );
     command.child.stdin?.end(input);
     return (await command).stdout;
@@ -88,30 +94,36 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
     JSON.parse(await runRaw(env, args, input));
   await run(aliceEnv, ['login'], alice.token);
   await run(bobEnv, ['login'], bob.token);
-  const clan = await run(aliceEnv, ['init', 'Two-agent acceptance']);
+  const created = await runRaw(aliceEnv, ['init', '--invite', bob.user.email, '--run'], undefined, false);
+  const clan = (await run(aliceEnv, ['status'])).clan;
   clanIds.push(clan.id);
-  const invitation = await run(aliceEnv, ['invite', bob.user.email]);
-  assert.equal(invitation.code, undefined);
-  assert.equal((await run(bobEnv, ['join'])).id, clan.id);
-  const codex = await run(aliceEnv, ['agent', 'add', 'Codex', '--show-token']);
-  const claude = await run(bobEnv, ['agent', 'add', 'claude', '--show-token']);
-  assert.equal(claude.agent.alias, 'claude');
+  assert.equal(clan.name, basename(directory));
+  assert.match(created, /Invited /);
+  const joined = await runRaw(bobEnv, ['join', clan.name, '--run', 'claude'], undefined, false);
+  assert.match(joined, /Joined and selected /);
+  assert.doesNotMatch(created + joined, /clqn_(inv_)?[A-Za-z0-9_-]{43}/);
+  const codexProfile = created.trim().split('\n').at(-1)!;
+  const claudeProfile = joined.trim().split('\n').at(-1)!;
+  assert.equal((await runRaw(aliceEnv, ['agent', 'run'], undefined, false)).trim(), codexProfile);
+  const { token: codexToken } = JSON.parse(await readFile(codexProfile, 'utf8'));
+  const codexEnv = { ...aliceEnv, CLQN_AGENT_PROFILE: codexProfile };
+  const claudeEnv = { ...bobEnv, CLQN_AGENT_PROFILE: claudeProfile };
+  const codex = await run(codexEnv, ['whoami']);
+  const claude = await run(claudeEnv, ['whoami']);
+  assert.match(claude.agent.alias, /^claude-/);
   assert.equal(codex.agent.ownerId, alice.user.id);
   assert.equal(claude.agent.ownerId, bob.user.id);
-  const codexEnv = { ...aliceEnv, CLQN_TOKEN: codex.token, CLQN_CLAN_ID: clan.id };
-  const claudeEnv = { ...bobEnv, CLQN_TOKEN: claude.token, CLQN_CLAN_ID: clan.id };
-  assert.equal((await run(codexEnv, ['whoami'])).agent.id, codex.agent.id);
   assert.equal((await run(bobEnv, ['agent', 'list'])).agents.length, 2);
   // An agent's scope wins over an unrelated clan saved by its human owner.
   const otherEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'other-human-clan') };
   await run(otherEnv, ['login'], alice.token);
   const otherClan = await run(otherEnv, ['init', 'Unrelated personal selection']);
   clanIds.push(otherClan.id);
-  const scopedCodexEnv: Record<string, string> = { ...otherEnv, CLQN_TOKEN: codex.token };
+  const scopedCodexEnv: Record<string, string> = { ...otherEnv, CLQN_TOKEN: codexToken };
   assert.equal(scopedCodexEnv.CLQN_CLAN_ID, undefined);
   const scopedMembers = await run(scopedCodexEnv, ['members']);
   assert.deepEqual(new Set(scopedMembers.members.map((member: { userId: string }) => member.userId)), new Set(userIds));
-  const cleanAgentEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'agent-only'), CLQN_TOKEN: codex.token };
+  const cleanAgentEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'agent-only'), CLQN_TOKEN: codexToken };
   assert.equal((await run(cleanAgentEnv, ['members'])).members.length, 2);
   const connectMcp = async (name: string, env: Record<string, string>) => {
     const client = new Client({ name, version: '1.0.0' });
@@ -171,7 +183,7 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
     alias: 'review',
   });
   assert.equal(
-    (await run(aliceEnv, ['task', 'assign', 'review', '--agent', 'claude'])).assignedAgentId,
+    (await run(aliceEnv, ['task', 'assign', 'review', '--agent', claude.agent.alias])).assignedAgentId,
     claude.agent.id,
   );
   assert.equal((await call(bobMcp, 'clqn_claim_task', { taskId: 'review' })).ownerAgentId, claude.agent.id);
@@ -184,7 +196,7 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   assert.equal(secondTask.alias, 'confirm');
   assert.equal(secondTask.description, 'confirm');
   assert.equal((await run(aliceEnv, ['task', 'alias', 'confirm', 'verify'])).id, secondTask.id);
-  assert.equal((await run(bobEnv, ['agent', 'alias', 'claude', 'reviewer'])).id, claude.agent.id);
+  assert.equal((await run(bobEnv, ['agent', 'alias', claude.agent.alias, 'reviewer'])).id, claude.agent.id);
   await call(bobMcp, 'clqn_claim_task', { taskId: 'verify' });
   assert.equal((await call(bobMcp, 'clqn_complete_task', { taskId: secondTask.id })).status, 'completed');
   assert.equal((await call(aliceMcp, 'clqn_list_tasks')).tasks.length, 2);

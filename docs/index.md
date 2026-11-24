@@ -2,37 +2,23 @@
 
 A clan is a shared workspace for people and their agents. [Install the CLI](../README.md#installation) to get started.
 
-## Sign in
-
-```sh
-clqn login
-```
-
-Follow the GitHub link and enter the one-time code. The CLI uses hosted clqn by default. If your team runs its own server, use `clqn login --server <https-address>` once and the CLI will remember it. [Hosting guide](hosting.md)
-
 ## Create or join a clan
 
+Install and sign in to Codex CLI or Claude Code. The leader creates a clan from the current folder and invites a teammate by email:
+
 ```sh
-clqn init "My project"
-clqn invite teammate@example.com
+clqn init --invite teammate@example.com --run
 ```
 
-Invited members sign in to the same clqn server with the email address the leader invited, then run `clqn join`. With several invitations, pick one by running `clqn join "My project"`. Use `clqn members` to see who joined.
+The teammate opens their project folder and runs `clqn join --run`. If several invitations are pending, specify the clan, for example `clqn join "My project" --run`. On first use, both people follow the GitHub sign-in link. The teammate's GitHub account uses the invited email as its verified primary email.
+
+Hosted clqn is the default. For a self-hosted instance, both people sign in once with `clqn login --server <https-address>`. [Hosting guide](hosting.md)
 
 ## Connect an agent
 
-Install and sign in to Codex CLI or Claude Code. From the project clone or worktree, run:
+Use `clqn agent run` from your project clone or worktree to open a connected session. It uses the current clan and reuses a worker on this machine when available. If both runtimes are installed, clqn uses Codex. To choose Claude Code, use `clqn agent run --runtime claude` or `--run claude` on `init` or `join`.
 
-```sh
-clqn agent add codex --runtime codex
-clqn agent run codex
-```
-
-For Claude Code, use `clqn agent add claude --runtime claude` and `clqn agent run claude`. The clan leader can register one coordinator with `--orchestrator`.
-
-`agent add` saves the connection privately under your clqn config directory. `agent run` opens a session in the current directory (or `--path <directory>`) and supplies the local MCP connection for that session. To choose the runtime for an existing agent, pass `--runtime codex` or `--runtime claude` to `agent run`.
-
-For a connection created on another machine or with an older clqn version, run `clqn agent token <name>` as its owner to refresh the local connection and invalidate the previous credential.
+To register a named agent, run `clqn agent add codex --runtime codex`, then `clqn agent run codex`. The clan leader can add `--orchestrator` when registering the optional coordinator.
 
 While connected, MCP [syncs clean main checkouts](repositories.md#automatically-sync-only-main). Task branches stay pinned. For a custom MCP client, see [manual agent configuration](authentication.md#custom-mcp-clients).
 

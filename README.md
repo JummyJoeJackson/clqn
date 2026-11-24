@@ -44,34 +44,23 @@ brew install clqn
 
 ## Quick start
 
-Install and sign in to Codex CLI or Claude Code. From your project directory:
+Install and sign in to Codex CLI or Claude Code. From your project folder, create a clan, invite your teammate, and open your agent:
 
 ```sh
-clqn login
-clqn init "My project"
-clqn agent add codex --runtime codex
-clqn agent run codex
+clqn init --invite teammate@example.com --run
 ```
 
-`clqn login` uses hosted clqn, which keeps your clan's members, tasks, and shared context available to the team. Open the GitHub link in your terminal, enter the short code, and approve sign-in. For a self-hosted clan, use `clqn login --server <https-address>` once. clqn remembers the address. [Hosting guide](docs/hosting.md)
-
-For Claude Code, run `clqn agent add claude --runtime claude` and `clqn agent run claude`. Use `clqn agent run` for each connected session. The clan leader can add `--orchestrator` when registering the optional coordinator. Each member can register their own workers. [Agent setup](docs/index.md#connect-an-agent)
-
-### Invite a teammate
+Your teammate runs this from their project folder to join and open their agent:
 
 ```sh
-clqn invite teammate@example.com
+clqn join --run
 ```
 
-Ask them to sign in with the invited email and run `clqn join`. With several invitations, they can pick one with `clqn join "My project"`. For a self-hosted clan, give them your server address.
+The first command on each machine prompts for GitHub sign-in. Follow the link and enter GitHub's short code. Use the GitHub account with the invited email. With several pending invitations, name the clan, for example `clqn join "My project" --run`.
 
-Find your clans with `clqn clans` and switch with `clqn use "My project"`.
+`clqn init` uses the folder name for the clan. Leave off `--run` to create or join first, then use `clqn agent run` whenever you want a connected session. If both runtimes are installed, use `--run claude` to choose Claude Code. [Agent setup](docs/index.md#connect-an-agent)
 
-Save token limits, allowed models, and approval preferences for your agents. These are recorded for the clan but [not enforced yet](docs/policies.md):
-
-```sh
-clqn limits --tokens 100000 --models provider/model --control approve
-```
+`clqn clans` shows your clans, and `clqn use "My project"` switches between them. Hosted clqn keeps your members, tasks, and shared context available to your team. For self-hosted teams, sign in once with `clqn login --server <https-address>`. [Hosting guide](docs/hosting.md)
 
 ## Share context and coordinate work
 
@@ -80,12 +69,12 @@ printf 'Run npm test before committing.\n' | clqn context write conventions --ex
 clqn context read conventions
 ```
 
-For code tasks, run from your project clone with Git and an authenticated GitHub CLI (`gh`). Each agent uses its own credentials.
+For code tasks, run from your project clone with Git and an authenticated GitHub CLI (`gh`). Use `clqn agent list` to find the worker’s alias. The clan leader can register an optional coordinator with `clqn agent add coordinator --orchestrator`.
 
 ```sh
 # Orchestrator
 clqn task add login-fix --code
-clqn task assign login-fix --agent codex
+clqn task assign login-fix --agent codex-teammate
 
 # Worker
 clqn task start login-fix

@@ -1,12 +1,33 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { constants } from 'node:fs';
+import { access, readFile, stat } from 'node:fs/promises';
+import { delimiter, resolve } from 'node:path';
 import { agentRegistrationSchema, agentSchema, ClqnClient } from '@clqn/shared';
 import { configDirectory, writePrivateJson } from './config.js';
 
 export const runtimes = ['codex', 'claude'] as const;
 export type Runtime = (typeof runtimes)[number];
+
+export async function detectAgentRuntime(preferred?: Runtime): Promise<Runtime> {
+  const directories = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
+  for (const runtime of preferred ? [preferred] : runtimes) {
+    const executable = await Promise.any(
+      directories.map(async (directory) => {
+        const path = resolve(directory, runtime);
+        await access(path, constants.X_OK);
+        if (!(await stat(path)).isFile()) throw new Error();
+        return path;
+      }),
+    ).catch(() => undefined);
+    if (executable) return runtime;
+  }
+  if (preferred)
+    throw new Error(
+      `Install ${preferred === 'codex' ? 'Codex CLI' : 'Claude Code'} and make sure ${preferred} is on PATH.`,
+    );
+  throw new Error('Install Codex CLI or Claude Code to start a connected agent. Make sure codex or claude is on PATH.');
+}
 
 export type AgentProfile = {
   agentId: string;

@@ -58,12 +58,12 @@ Use your personal credential to rename an agent you registered. A task’s claim
 | --- | --- |
 | `login` | Sign in with GitHub. Use `--server <url>` to choose a self-hosted instance |
 | `whoami` | Show the human or agent identity |
-| `init "My project"` | Create and select a clan |
-| `invite bob@example.com` / `join [clan]` | Invite someone by email or accept an invitation |
+| `init [name] --invite <email> --run` | Create a clan, invite a teammate, and open your agent. Name, invitation, and launch are optional |
+| `invite bob@example.com` / `join [clan] --run` | Invite someone by email or accept an invitation. Use `--run` to open your agent after joining |
 | `members remove <member>` / `leave` | Remove a member (leader) or leave a clan |
 | `members transfer <member>` | Hand clan leadership to another member |
 | `clans` / `members` / `agent list` | List participants and workspaces |
-| `agent run <agent>` | Start a connected Codex or Claude Code session |
+| `agent run [name]` | Start a connected Codex or Claude Code session. Omit the name to use your local worker |
 | `agent revoke <agent>` / `agent token <agent>` | Revoke or refresh an agent connection |
 | `context list` / `context read <key>` / `context history <key>` | Browse shared context and its revisions |
 | `task list` / `task show <id>` | Inspect work; filter with `--status`, `--mine`, and page with `--limit` / `--after` |

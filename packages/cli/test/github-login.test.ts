@@ -106,3 +106,64 @@ test('GitHub CLI login reuses the saved server and retries a temporary poll fail
   assert.deepEqual(JSON.parse(result.stdout), user);
   assert.equal(polls, 2);
 });
+
+test('first-time interactive init signs in and creates the clan without a separate login command', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'clqn-init-'));
+  const token = `clqn_${'c'.repeat(43)}`;
+  const user = { id: randomUUID(), email: 'verified@example.com' };
+  const clan = { id: randomUUID(), name: 'My project', createdBy: user.id, createdAt: new Date().toISOString() };
+  const requests: string[] = [];
+  const server = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    requests.push(req.url!);
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/auth/github/start') {
+      res.end(
+        JSON.stringify({
+          handle: 'h'.repeat(43),
+          userCode: 'ABCD-EFGH',
+          verificationUri: 'https://github.com/login/device',
+          expiresIn: 15,
+          interval: 5,
+        }),
+      );
+    } else if (req.url === '/auth/github/poll') {
+      res.end(JSON.stringify({ status: 'complete', user, token }));
+    } else {
+      assert.equal(req.url, '/v1/clans');
+      assert.equal(req.headers.authorization, `Bearer ${token}`);
+      assert.deepEqual(JSON.parse(raw), { name: clan.name });
+      res.end(JSON.stringify(clan));
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const interactive = `data:text/javascript,${encodeURIComponent("Object.defineProperty(process.stdin, 'isTTY', { value: true })")}`;
+  const result = await promisify(execFile)(
+    process.execPath,
+    [
+      ...sourceNodeArgs,
+      '--import',
+      interactive,
+      'packages/cli/src/index.ts',
+      'init',
+      clan.name,
+      '--api-url',
+      url,
+      '--json',
+    ],
+    {
+      env: { ...process.env, CLQN_CONFIG_DIR: dir, CLQN_TOKEN: undefined },
+      timeout: 15000,
+    },
+  );
+  assert.deepEqual(JSON.parse(result.stdout), clan);
+  assert.match(result.stderr, /ABCD-EFGH/);
+  assert.ok(!(result.stdout + result.stderr).includes(token));
+  assert.deepEqual(requests, ['/auth/github/start', '/auth/github/poll', '/v1/clans']);
+});
