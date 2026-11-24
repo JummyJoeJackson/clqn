@@ -145,7 +145,7 @@ export function metricsFrame(view: MetricsView): Frame {
     const [glyph, , tone] = runStatuses[task.status];
     const amount = task.tokens === null ? `~${number(task.estimatedTokens)}` : number(task.tokens);
     const who = content >= 48 ? `  ${clip(name(task.worker), 16)}` : '';
-    const label = Math.max(1, content - width(amount) - width(who) - 3);
+    const label = Math.max(1, content - width(amount) - width(who) - 4);
     return `  ${paint(glyph, tone)} ${pad(clip(plain(task.title), label - 1), label - 1)}${paint(who, 'muted')} ${paint(amount, 'muted')}`;
   });
 
@@ -160,7 +160,7 @@ export function metricsFrame(view: MetricsView): Frame {
   const extra = listRows - taskRows;
   const fit = (items: string[], count: number, empty: string) => {
     if (count < 1) return [];
-    if (!items.length) return [paint(`  ${empty}`, 'muted')];
+    if (!items.length) return [paint(clip(`  ${empty}`, content), 'muted')];
     if (items.length <= count) return items;
     return [...items.slice(0, Math.max(0, count - 1)), paint(`  +${items.length - count + 1} more`, 'muted')];
   };

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ChatMetrics, ChatState } from '@clqn/shared';
-import { chatFrame } from '../src/chat-view.js';
+import { chatFrame, width } from '../src/chat-view.js';
 import { areaChart, metricsFrame } from '../src/metrics-view.js';
 
 const metrics: ChatMetrics = {
@@ -54,6 +54,16 @@ test('metrics tab fits small terminals and shows loading for another window', ()
   assert.match(loading.lines.join('\n'), /Loading metrics…/);
   assert.match(loading.lines.at(-1)!, /T 24h \[7d\]/);
   assert.deepEqual(metricsFrame({ ...view, rows: 11 }).lines, ['Enlarge terminal · Ctrl+C to quit']);
+});
+
+test('metrics lines never overflow the terminal at any size', () => {
+  for (const sample of [metrics, { ...metrics, tasks: [] }])
+    for (let columns = 28; columns <= 120; columns++)
+      for (const rows of [12, 14, 20, 40]) {
+        const frame = metricsFrame({ ...view, metrics: sample, columns, rows });
+        assert.ok(frame.lines.length <= rows, `${columns}x${rows}`);
+        for (const line of frame.lines) assert.ok(width(line) <= columns, `${columns}x${rows}: ${line}`);
+      }
 });
 
 test('area charts scale to the width and keep the peak', () => {
