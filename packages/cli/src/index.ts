@@ -33,7 +33,6 @@ import {
 import {
   type Config,
   hostedServer,
-  legacyLocalServer,
   preferredServer,
   readConfig,
   removeConfig,
@@ -79,9 +78,7 @@ const program = new Command()
       return;
     }
     if (command.name() === 'login') return;
-    // Avoid sending a legacy local credential to a remembered or hosted server.
-    serverUrl =
-      configuredServer() ?? (process.env.CLQN_TOKEN === undefined ? await preferredServer() : legacyLocalServer);
+    serverUrl = configuredServer() ?? (await preferredServer());
   });
 
 const configuredServer = () => program.opts<{ apiUrl?: string }>().apiUrl ?? process.env.CLQN_API_URL;
@@ -209,7 +206,7 @@ program
     const github = options.github === true || process.stdin.isTTY === true;
     if (options.server !== undefined && program.opts().apiUrl !== undefined)
       throw new Error('Use one server option for sign-in, either --server or --api-url');
-    serverUrl = await loginServer(options.server ?? configuredServer(), github);
+    serverUrl = await loginServer(options.server ?? configuredServer());
     if (github) {
       const user = await signInWithGithub();
       output(user, `Logged in as ${user.email}`);
@@ -570,10 +567,8 @@ agent
       );
       await rememberAgent(result, options.runtime);
       const clan = options.clan ? ` --clan ${result.agent.clanId}` : '';
-      const savedName = result.agent.name;
-      const reference =
-        result.agent.alias ?? `${savedName.startsWith('-') ? '-- ' : ''}'${savedName.replaceAll("'", "'\\''")}'`;
-      const launch = `clqn agent run${clan} ${reference}`;
+      // Aliases and IDs never need shell quoting.
+      const launch = `clqn agent run ${result.agent.alias ?? result.agent.id}${clan}`;
       const added = `Registered ${agentLabel(result.agent)} as a ${result.agent.role}.`;
       output(
         options.showToken ? result : { agent: agentSummary(result.agent) },

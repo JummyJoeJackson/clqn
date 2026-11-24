@@ -1,12 +1,10 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { ApiError, ClqnClient } from '@clqn/shared';
-import { hostedServer, legacyLocalServer, preferredServer, serverOrigin } from './config.js';
+import { hostedServer, preferredServer, serverOrigin } from './config.js';
 import { terminalText } from './terminal.js';
 
-export async function loginServer(explicit: string | undefined, github: boolean): Promise<string> {
-  if (explicit !== undefined) return serverOrigin(explicit);
-  // A piped credential historically targets loopback unless its server is explicit.
-  return github ? preferredServer() : legacyLocalServer;
+export async function loginServer(explicit: string | undefined): Promise<string> {
+  return explicit === undefined ? preferredServer() : serverOrigin(explicit);
 }
 
 export async function readLoginToken(): Promise<string> {
