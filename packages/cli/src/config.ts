@@ -53,7 +53,7 @@ export async function readConfig(apiUrl: string): Promise<Config> {
       ...(typeof value.clanId === 'string' ? { clanId: value.clanId } : {}),
     };
   } catch {
-    throw new Error('Invalid clqn configuration; log out to remove it');
+    throw new Error('Invalid clqn configuration. Remove it from the clqn config directory and run clqn again.');
   }
 }
 
@@ -89,7 +89,7 @@ export async function readServer(): Promise<string | undefined> {
     return serverOrigin(await readFile(serverFile(), 'utf8'));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw new Error('Could not read the saved server. Run clqn login --server <url> to select it again.');
+    throw new Error('Could not read the saved server. Run clqn --api-url <url> to select it again.');
   }
 }
 

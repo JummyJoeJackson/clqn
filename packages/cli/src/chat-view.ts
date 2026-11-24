@@ -110,7 +110,6 @@ interface View {
   state?: ChatState | undefined;
   messages: ChatMessage[];
   settings?: SettingsView | undefined;
-  clans?: { names: string[]; selected: number } | undefined;
   draft: string;
   caret: number;
   scroll: number;
@@ -152,6 +151,7 @@ function settingsLines(settings: SettingsView, columns: number, paint: Paint) {
     `Token limit      ${settings.tokenText || '∞'}`,
     `Agent limit      ${settings.agentText || '∞'}`,
     settings.action,
+    'Sign out',
   ];
   return [
     paint('Session settings', 'bold'),
@@ -204,22 +204,6 @@ export function chatFrame(view: View): Frame {
     ...(cursor && cursor.row < rows ? { cursor: { row: cursor.row, column: cursor.column + margin } } : {}),
   });
   const notice = view.notice ? paint(clip(plain(view.notice), content), 'warning') : '';
-  if (view.clans) {
-    const offset = Math.max(0, view.clans.selected - rows + 6);
-    lines.push(
-      'Choose a clan',
-      '',
-      ...view.clans.names
-        .slice(offset, offset + rows - 5)
-        .map((clan, i) =>
-          i + offset === view.clans!.selected
-            ? paint(clip(`› ${plain(clan)}`, content), 'accent')
-            : clip(`  ${plain(clan)}`, content),
-        ),
-    );
-    lines.push(paint('↑↓ Move  Enter Open  Esc Quit', 'muted'));
-    return finish();
-  }
   if (view.settings) {
     lines.push('', ...settingsLines(view.settings, content, paint));
     if (notice) lines.splice(rows - 1, 0, notice);

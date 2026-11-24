@@ -87,7 +87,7 @@ async function fixture(t: TestContext) {
     await writeFile(join(bin, executable), '#!/bin/sh\necho invoked >> "$CLQN_TEST_EXECUTIONS"\nexit 91\n', {
       mode: 0o700,
     });
-  const call = (args: string[], options: { savedLogin?: boolean; input?: string; profile?: string } = {}) => {
+  const call = (args: string[], options: { profile?: string } = {}) => {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       CLQN_CONFIG_DIR: join(directory, 'config'),
@@ -96,15 +96,9 @@ async function fixture(t: TestContext) {
       PATH: `${bin}:${process.env.PATH}`,
       CLQN_TEST_EXECUTIONS: executions,
     };
-    if (options.savedLogin) delete env.CLQN_TOKEN;
     if (options.profile) env.CLQN_AGENT_PROFILE = options.profile;
     else delete env.CLQN_AGENT_PROFILE;
-    const result = run(process.execPath, [...sourceNodeArgs, cli, '--api-url', apiUrl, ...args], {
-      env,
-      cwd: directory,
-    });
-    result.child.stdin?.end(options.input);
-    return result;
+    return run(process.execPath, [...sourceNodeArgs, cli, '--api-url', apiUrl, ...args], { env, cwd: directory });
   };
   const renameAgent = (name: string) => {
     if (registered) registered.name = name;
@@ -184,7 +178,7 @@ test('agent setup saves a private profile and launches either runtime with a sco
     f.call(['whoami'], { profile: join(f.directory, 'missing') }),
     /saved agent connection is missing/,
   );
-  await assert.rejects(f.call(['logout'], { profile }), /personal terminal/);
+  await assert.rejects(f.call(['use', 'clan'], { profile }), /personal terminal/);
 });
 
 test('agent add exposes a credential only when explicitly requested for a custom runtime', async (t) => {
@@ -237,13 +231,6 @@ test('simple commands reject invalid names and limit values before HTTP access',
   assert.equal(f.requests.length, 0);
 });
 
-test('login accepts piped input', async (t) => {
-  const f = await fixture(t);
-  const login = JSON.parse((await f.call(['login', '--json'], { input: `${f.token}\n`, savedLogin: true })).stdout);
-  assert.deepEqual(login, f.user);
-  assert.ok(f.requests.every((request) => request.path === '/v1/me' && request.authorization === `Bearer ${f.token}`));
-});
-
 test('removed commands and flags fail before API or Git access', async (t) => {
   const f = await fixture(t);
   for (const args of [
@@ -258,7 +245,11 @@ test('removed commands and flags fail before API or Git access', async (t) => {
     ...['add', 'start', 'submit', 'merge', 'done'].map((action) => ['task', action, taskId]),
     ...['context', 'status', 'log', 'metrics'].map((action) => [action]),
     ['agent', 'alias', 'worker', 'short'],
+    ['login'],
     ['login', '--token-stdin'],
+    ['logout'],
+    ['init', 'My project'],
+    ['join', 'My project'],
     ['limits', '--token-limit', '10'],
   ])
     await assert.rejects(f.call(args), (thrown) => {

@@ -5,7 +5,6 @@ import {
   type ChatMessage,
   type ChatSettings,
   type ChatState,
-  type Clan,
   type ClqnClient,
   type SendChat,
 } from '@clqn/shared';
@@ -28,17 +27,14 @@ const setupFor = (settings: ChatSettings): Setup => ({
   field: 3,
 });
 
-export async function runChat(api: ClqnClient, selected: string | undefined) {
+// Resolves when the user quits, or with 'sign-out' when they choose Sign out in settings.
+export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' | 'sign-out'> {
   const { stdin, stdout } = process;
   const actor = await api.whoami();
-  if (actor.agentId) throw new Error('Log in with a personal credential to open the chat');
-  const clans: Clan[] = selected ? [] : (await api.listClans()).clans;
-  if (!selected && !clans.length)
-    throw new Error('Create a clan with clqn init or accept an invitation with clqn join');
-  let clanId = selected ?? (clans.length === 1 ? clans[0]!.id : undefined);
-  let clanIndex = 0;
-  let info: Info | undefined = clanId ? await api.chatInfo(clanId) : undefined;
-  let setup = info ? setupFor(info.settings) : undefined;
+  if (actor.agentId) throw new Error('Sign in with a personal credential to open the chat');
+  let info: Info = await api.chatInfo(clanId);
+  let setup: Setup | undefined = setupFor(info.settings);
+  let result: 'quit' | 'sign-out' = 'quit';
   let replaceField = true;
   let state: ChatState | undefined;
   let draft = '';
@@ -76,12 +72,12 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
 
   function draw() {
     if (closed) return;
-    const session = state?.session ?? info?.session;
+    const session = state?.session ?? info.session;
     const frame = chatFrame({
       columns: columns(),
       rows: rows(),
       color: !('NO_COLOR' in process.env),
-      clan: session?.clan ?? info?.clan ?? clans[clanIndex]?.name ?? 'Shared chat',
+      clan: session?.clan ?? info.clan,
       host: session?.host,
       userId: actor.id,
       state,
@@ -95,12 +91,11 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
                 ? 'Save settings'
                 : session
                   ? 'Join session'
-                  : info?.canStart
+                  : info.canStart
                     ? 'Start session'
                     : 'Check for session',
           }
         : undefined,
-      clans: !info ? { names: clans.map((clan) => clan.name), selected: clanIndex } : undefined,
       draft,
       caret,
       scroll,
@@ -141,7 +136,7 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
   }
 
   async function refresh() {
-    if (closed || refreshing || !state || !clanId) return;
+    if (closed || refreshing || !state) return;
     refreshing = true;
     try {
       mergeState(await api.chatState(clanId, controller.signal));
@@ -154,24 +149,8 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
     }
   }
 
-  async function chooseClan() {
-    if (busy) return;
-    busy = true;
-    const chosen = clans[clanIndex]!;
-    try {
-      info = await api.chatInfo(chosen.id, controller.signal);
-      clanId = chosen.id;
-      setup = setupFor(info.settings);
-    } catch (error) {
-      notice = help(error);
-    } finally {
-      busy = false;
-      draw();
-    }
-  }
-
   async function save() {
-    if (busy || !clanId || !setup || !info) return;
+    if (busy || !setup) return;
     busy = true;
     notice = undefined;
     draw();
@@ -200,7 +179,7 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
   }
 
   async function olderPage() {
-    if (loadOlder || !historyCursor || !clanId) return;
+    if (loadOlder || !historyCursor) return;
     loadOlder = true;
     try {
       const page = await api.chatHistory(clanId, historyCursor, controller.signal);
@@ -215,7 +194,7 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
   }
 
   async function flush() {
-    if (sending || !clanId) return;
+    if (sending) return;
     sending = true;
     failed = false;
     try {
@@ -237,7 +216,7 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
 
   async function decide(approve: boolean) {
     const pending = state?.approvals[approval];
-    if (!pending || !clanId || busy) return;
+    if (!pending || busy) return;
     busy = true;
     try {
       await api.approveChat(clanId, pending.messageId, approve, controller.signal);
@@ -266,13 +245,16 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
       else setup = undefined;
     } else if (key.name === 'tab' || key.name === 'up' || key.name === 'down') {
       const change = key.name === 'up' || key.shift ? -1 : 1;
-      setup.field = (setup.field + 4 + change) % 4;
+      setup.field = (setup.field + 5 + change) % 5;
       replaceField = true;
     } else if (setup.field === 0 && ['left', 'right', 'space', 'return'].includes(key.name ?? '')) {
       setup.value = { ...setup.value, approval: setup.value.approval === 'manual' ? 'automatic' : 'manual' };
     } else if (key.name === 'return') {
       if (setup.field === 3) void save();
-      else {
+      else if (setup.field === 4) {
+        result = 'sign-out';
+        stop();
+      } else {
         setup.field++;
         replaceField = true;
       }
@@ -365,19 +347,14 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
       return;
     }
     notice = undefined;
-    if (!info && !busy) {
-      if (key.name === 'escape') stop();
-      else if (key.name === 'down') clanIndex = (clanIndex + 1) % clans.length;
-      else if (key.name === 'up') clanIndex = (clanIndex + clans.length - 1) % clans.length;
-      else if (key.name === 'return') void chooseClan();
-    } else if (setup) setupKey(text ?? '', key);
+    if (setup) setupKey(text ?? '', key);
     else if (state) composerKey(text ?? '', key);
     draw();
   }
 
   const wasRaw = stdin.isRaw;
   let stop!: () => void;
-  await new Promise<void>((resolve) => {
+  return new Promise((resolve) => {
     const timer = setInterval(() => void refresh(), 2500);
     stop = () => {
       if (closed) return;
@@ -392,7 +369,7 @@ export async function runChat(api: ClqnClient, selected: string | undefined) {
       stdin.setRawMode(wasRaw);
       stdin.pause();
       stdout.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1049l');
-      resolve();
+      resolve(result);
     };
     emitKeypressEvents(stdin);
     stdin.setRawMode(true);

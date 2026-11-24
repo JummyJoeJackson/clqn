@@ -1,14 +1,11 @@
 #!/usr/bin/env node
 import { randomBytes } from 'node:crypto';
-import { basename, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { serveMcp } from '@clqn/mcp';
 import {
   type Agent,
   ApiError,
   ClqnClient,
-  createClanSchema,
-  createInvitationSchema,
-  invitationCodeSchema,
   registerAgentSchema,
   repositorySlugSchema,
   resourceAliasSchema,
@@ -28,26 +25,20 @@ import {
   saveAgentProfile,
 } from './agent-session.js';
 import { runChat } from './chat.js';
-import {
-  type Config,
-  hostedServer,
-  preferredServer,
-  readConfig,
-  removeConfig,
-  writeConfig,
-  writeServer,
-} from './config.js';
+import { hostedServer, preferredServer, readConfig, writeConfig } from './config.js';
 import { localRepository } from './git.js';
 import { configureGithubWebhook, removeGithubWebhook } from './github-hooks.js';
-import { githubLogin, loginServer, readLoginToken } from './login.js';
 import { runMcpSync } from './mcp-sync.js';
+import { chooseClan, selectClan, signIn, signOut, terminalPrompt } from './setup.js';
 import { terminalText } from './terminal.js';
 
 let serverUrl = hostedServer;
 let sessionProfile: AgentProfile | undefined;
 const program = new Command()
   .name('clqn')
-  .description('Your agents. My agents. One workspace.\nRun clqn with no command to open the clan chat.')
+  .description(
+    'Your agents. My agents. One workspace.\nRun clqn with no command to sign in, pick a clan, and open the chat.',
+  )
   .version(VERSION)
   .option('--api-url <url>', 'override the saved clqn server for this command')
   .option('--json', 'output machine-readable JSON')
@@ -57,15 +48,13 @@ const program = new Command()
     const path = command.name() === 'mcp' ? (command.opts().profile as string | undefined) : undefined;
     const profilePath = path ?? process.env.CLQN_AGENT_PROFILE;
     if (profilePath !== undefined) {
-      if (['login', 'logout', 'run', 'use'].includes(command.name()))
-        throw new Error('Run that command from your personal terminal.');
+      if (['run', 'use'].includes(command.name())) throw new Error('Run that command from your personal terminal.');
       sessionProfile = await readAgentProfile(profilePath);
       if (!sessionProfile)
         throw new Error('The saved agent connection is missing. Refresh it from your personal terminal.');
       serverUrl = sessionProfile.server;
       return;
     }
-    if (command.name() === 'login') return;
     serverUrl = configuredServer() ?? (await preferredServer());
   });
 
@@ -76,36 +65,8 @@ const output = (value: unknown, human: string) => verbatim(value, terminalText(h
 const displayId = (value: { id: string; alias?: string | null | undefined }) =>
   value.alias ? `${value.alias} (${value.id})` : value.id;
 const defaultAlias = (name: string) => resourceAliasSchema.safeParse(name.trim()).data;
-// Keep the selected clan across logins; an agent token selects its own clan. The API still checks membership.
-const saveToken = async (token: string, scopedClan?: string) => {
-  const { clanId } = await readConfig(apiUrl()).catch((): Config => ({}));
-  const selected = scopedClan ?? clanId;
-  await writeConfig(apiUrl(), selected ? { token, clanId: selected } : { token });
-  await writeServer(apiUrl());
-};
 const client = async () =>
   new ClqnClient(apiUrl(), sessionProfile?.token ?? process.env.CLQN_TOKEN ?? (await readConfig(apiUrl())).token);
-const signInWithGithub = async (expectedUserId?: string) => {
-  const { token, user } = await githubLogin(apiUrl(), Boolean(program.opts().json));
-  if (expectedUserId !== undefined && user.id !== expectedUserId) {
-    await new ClqnClient(apiUrl(), token).logout().catch(() => undefined);
-    throw new Error('Retry with the GitHub account that received the invitation. Use clqn login to switch accounts.');
-  }
-  await saveToken(token);
-  return user;
-};
-const ensureSetupLogin = async () => {
-  if (sessionProfile || process.env.CLQN_TOKEN !== undefined || (await readConfig(apiUrl())).token) return;
-  if (!process.stdin.isTTY) throw new Error('Run clqn login to sign in, then try again.');
-  const user = await signInWithGithub();
-  console.error(terminalText(`Logged in as ${user.email}`, process.stderr.isTTY));
-};
-const runOption = () => new Option('--run [runtime]', 'open your agent in Codex or Claude Code').choices(runtimes);
-const setupRuntime = async (run: boolean | Runtime | undefined) => {
-  if (!run) return undefined;
-  if (program.opts().json) throw new Error('Use --run in a terminal without --json.');
-  return detectAgentRuntime(run === true ? undefined : run);
-};
 
 program
   .command('health')
@@ -186,54 +147,6 @@ repo
   });
 
 program
-  .command('login')
-  .description('Sign in with GitHub')
-  .option('--server <url>', 'choose and remember a self-hosted server')
-  .option('--github', 'sign in using GitHub device authorization even when input is redirected')
-  .action(async (options: { github?: boolean; server?: string }) => {
-    const github = options.github === true || process.stdin.isTTY === true;
-    if (options.server !== undefined && program.opts().apiUrl !== undefined)
-      throw new Error('Use one server option for sign-in, either --server or --api-url');
-    serverUrl = await loginServer(options.server ?? configuredServer());
-    if (github) {
-      const user = await signInWithGithub();
-      output(user, `Logged in as ${user.email}`);
-      return;
-    }
-    const token = await readLoginToken();
-    const user = await new ClqnClient(apiUrl(), token).whoami();
-    await saveToken(token, user.clanId);
-    output(user, `Logged in as ${user.email}`);
-  });
-
-program
-  .command('logout')
-  .description('Revoke the saved token for this API and remove local credentials and clan selection')
-  .action(async () => {
-    const { token } = await readConfig(apiUrl()).catch((): Config => ({}));
-    let revoked = false;
-    if (token) {
-      try {
-        revoked = (await new ClqnClient(apiUrl(), token).logout()).revoked;
-      } catch {
-        // Local removal still happens when the API is unreachable; the output reports the failed revocation.
-      }
-    }
-    await removeConfig(apiUrl());
-    const environmentTokenActive = Boolean(process.env.CLQN_TOKEN);
-    output(
-      { credentialsRemoved: true, tokenRevoked: revoked, environmentTokenActive },
-      [
-        'Local credentials removed.',
-        token && !revoked ? 'The saved token could not be revoked on the server.' : '',
-        environmentTokenActive ? 'CLQN_TOKEN is still set and was not revoked; unset it to stop using that token.' : '',
-      ]
-        .filter(Boolean)
-        .join(' '),
-    );
-  });
-
-program
   .command('whoami')
   .description('Show the authenticated human or agent identity')
   .action(async () => {
@@ -246,39 +159,6 @@ program
   });
 
 program
-  .command('init [name]')
-  .description('Create and select a clan (defaults to the current folder name)')
-  .option('--invite <email>', 'invite a teammate to the new clan')
-  .addOption(runOption())
-  .action(async (name: string | undefined, options: { invite?: string; run?: boolean | Runtime }) => {
-    const input = createClanSchema.parse({
-      name: name ?? (basename(process.cwd()).trim().slice(0, 100) || 'My project'),
-    });
-    const email =
-      options.invite === undefined ? undefined : createInvitationSchema.parse({ email: options.invite }).email;
-    const runtime = await setupRuntime(options.run);
-    await ensureSetupLogin();
-    const config = await readConfig(apiUrl());
-    const api = await client();
-    const clan = await api.createClan(input.name);
-    await writeConfig(apiUrl(), { ...config, clanId: clan.id });
-    let human = `Created and selected ${clan.name}.`;
-    if (email) {
-      try {
-        await api.createInvitation(clan.id, email);
-      } catch {
-        throw new Error(`${human} The invitation failed. Retry with clqn invite <email>.`);
-      }
-      human += `\nInvited ${email}. Ask them to run clqn join${runtime ? ' --run' : ''}.`;
-    }
-    output(
-      email ? { ...clan, invited: email } : clan,
-      runtime ? human : `${human}\nRun clqn agent run to open your agent.`,
-    );
-    if (runtime) await runConnectedAgent(undefined, { clan: clan.id, path: '.', runtime });
-  });
-
-program
   .command('clans')
   .description('List your clans')
   .action(async () => {
@@ -288,7 +168,7 @@ program
     output(
       result,
       result.clans.map((clan) => `${clan.name}${clan.id === active ? ' (current)' : ''}`).join('\n') ||
-        'No clans yet. Run clqn init to create one, or ask a teammate to invite you.',
+        'No clans yet. Run clqn to create one, or ask a teammate to invite you.',
     );
   });
 
@@ -308,68 +188,6 @@ program
     output(clan, `Using ${clan.name}.`);
   });
 
-async function joinPendingInvitation(api: ClqnClient, name: string | undefined, list: boolean | undefined) {
-  const { invitations } = await api.listInvitations();
-  if (list || (name === undefined && invitations.length !== 1)) {
-    const lines = invitations.map((invitation) => invitation.clanName).join('\n');
-    output(
-      { invitations },
-      lines
-        ? `Pending invitations:\n${lines}\n\nTo accept one, run clqn join "<clan name>".`
-        : 'No pending invitations. Ask your teammate to invite the email you signed in with.',
-    );
-    return;
-  }
-  const byId = invitations.find((invitation) => invitation.clanId === name);
-  const byName = invitations.filter((invitation) => invitation.clanName.toLowerCase() === name?.toLowerCase());
-  if (!byId && byName.length > 1)
-    throw new Error('Several pending invitations have that name. Run clqn join --list --json and use the clan ID.');
-  const invitation = name === undefined ? invitations[0] : (byId ?? byName[0]);
-  if (!invitation) throw new Error('No pending invitation for that clan. Run clqn join --list.');
-  return api.acceptInvitation(invitation.clanId);
-}
-
-program
-  .command('join [clan]')
-  .description('Accept a pending clan invitation for your signed-in email')
-  .option('--list', 'show pending invitations without accepting one')
-  .addOption(runOption())
-  .action(async (clanName: string | undefined, options: { list?: boolean; run?: boolean | Runtime }) => {
-    if (options.list && options.run) throw new Error('Use --run to join or --list to see invitations.');
-    const runtime = await setupRuntime(options.run);
-    const name = clanName === undefined ? undefined : createClanSchema.parse({ name: clanName }).name;
-    await ensureSetupLogin();
-    const api = await client();
-    const code = invitationCodeSchema.safeParse(name);
-    let clan: Awaited<ReturnType<typeof joinPendingInvitation>>;
-    if (!options.list && code.success) {
-      clan = await api.joinClan(code.data);
-    } else {
-      try {
-        clan = await joinPendingInvitation(api, name, options.list);
-      } catch (error) {
-        if (
-          !(error instanceof ApiError) ||
-          error.code !== 'INVITATION_LOGIN_REQUIRED' ||
-          !process.stdin.isTTY ||
-          sessionProfile ||
-          process.env.CLQN_TOKEN !== undefined
-        )
-          throw error;
-        const user = await api.whoami();
-        console.error('Verify your GitHub email to continue.');
-        await signInWithGithub(user.id);
-        clan = await joinPendingInvitation(await client(), name, options.list);
-      }
-    }
-    if (!clan) return;
-    const config = await readConfig(apiUrl());
-    await writeConfig(apiUrl(), { ...config, clanId: clan.id });
-    const joined = `Joined and selected ${clan.name}.`;
-    output(clan, runtime ? joined : `${joined}\nRun clqn agent run to open your agent.`);
-    if (runtime) await runConnectedAgent(undefined, { clan: clan.id, path: '.', runtime });
-  });
-
 program
   .command('invite <email>')
   .description('Invite someone to your clan by email (clan leaders only)')
@@ -384,7 +202,7 @@ program
         `Invitation for ${invitation.email}: ${code}\nExpires ${invitation.expiresAt}. Share the code privately with the intended member.`,
       );
     } else {
-      output(invitation, `Invited ${invitation.email}. Ask them to sign in to the same clqn server and run clqn join.`);
+      output(invitation, `Invited ${invitation.email}. Ask them to run clqn and choose Join a clan.`);
     }
   });
 
@@ -706,6 +524,45 @@ program
     });
   });
 
+// The one interactive command: sign in if needed, pick or set up a clan, then open the chat.
+async function openChat() {
+  const environmentToken = process.env.CLQN_TOKEN !== undefined;
+  if (!environmentToken) {
+    const { token } = await readConfig(apiUrl());
+    const valid =
+      token !== undefined &&
+      (await new ClqnClient(apiUrl(), token).whoami().then(
+        () => true,
+        (error: unknown) => {
+          if (error instanceof ApiError && error.status === 401) return false;
+          throw error;
+        },
+      ));
+    if (!valid) {
+      const user = await signIn(apiUrl());
+      console.error(terminalText(`Signed in as ${user.email}`, process.stderr.isTTY));
+    }
+  }
+  let clanId = process.env.CLQN_CLAN_ID ?? (await readConfig(apiUrl())).clanId;
+  if (!clanId) {
+    const prompt = terminalPrompt();
+    try {
+      const clan = await chooseClan({
+        server: apiUrl(),
+        connect: client,
+        ask: prompt.ask,
+        print: (text) => console.log(text),
+        canSignIn: !environmentToken,
+      });
+      clanId = clan.id;
+    } finally {
+      prompt.close();
+    }
+    await selectClan(apiUrl(), clanId);
+  }
+  if ((await runChat(await client(), clanId)) === 'sign-out') console.log(await signOut(apiUrl()));
+}
+
 try {
   // Keep command parsing and errors unchanged for scripted and explicit invocations.
   const args = process.stdin.isTTY && process.stdout.isTTY ? program.parseOptions(process.argv.slice(2)) : undefined;
@@ -713,9 +570,7 @@ try {
     if (process.env.CLQN_AGENT_PROFILE !== undefined)
       throw new Error('Open the shared chat from your personal terminal.');
     serverUrl = configuredServer() ?? (await preferredServer());
-    await ensureSetupLogin();
-    const config = await readConfig(apiUrl());
-    await runChat(await client(), process.env.CLQN_CLAN_ID ?? config.clanId);
+    await openChat();
   } else {
     await program.parseAsync();
   }
@@ -725,7 +580,7 @@ try {
   if (error instanceof ApiError && error.status === 401 && !process.env.CLQN_TOKEN) {
     humanMessage = sessionProfile
       ? 'Refresh this agent’s local connection from your personal terminal.'
-      : 'Run clqn login to sign in, then try again.';
+      : 'Run clqn to sign in, then try again.';
   }
   console.error(
     program.opts().json
