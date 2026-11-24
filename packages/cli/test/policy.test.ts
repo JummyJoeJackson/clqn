@@ -30,7 +30,7 @@ async function fixture(t: TestContext, { conflict = false } = {}) {
     allowedModels: null,
     control: 'manual',
     revision: 7,
-    enforcement: 'unavailable',
+    enforcement: 'models',
   };
   const requests: {
     method: string | undefined;
@@ -76,7 +76,7 @@ async function fixture(t: TestContext, { conflict = false } = {}) {
   return { call, requests, token, initial: { ...policy } };
 }
 
-test('limits returns JSON and states the lack of runtime enforcement in human output', async (t) => {
+test('limits returns JSON and states model enforcement in human output', async (t) => {
   const f = await fixture(t);
   const result = await f.call(['limits', '--json']);
   assert.deepEqual(JSON.parse(result.stdout), f.initial);
@@ -86,7 +86,7 @@ test('limits returns JSON and states the lack of runtime enforcement in human ou
   assert.match(human.stdout, /Token limit: none/);
   assert.match(human.stdout, /Allowed models: any/);
   assert.match(human.stdout, /Leader control: manual/);
-  assert.match(human.stdout, /Runtime enforcement is unavailable/);
+  assert.match(human.stdout, /Allowed models are enforced/);
   assert.match(human.stdout, /does not grant execution access/);
   assert.ok(f.requests.every((request) => request.path === `/v1/clans/${clanId}/policy`));
 });

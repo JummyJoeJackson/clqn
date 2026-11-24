@@ -37,7 +37,7 @@ async function fixture(t: TestContext) {
     allowedModels: null,
     control: 'manual',
     revision: 3,
-    enforcement: 'unavailable',
+    enforcement: 'models',
   };
   const requests: {
     method: string | undefined;
@@ -198,7 +198,7 @@ test('limits shows current settings or updates them directly', async (t) => {
   const f = await fixture(t);
   const initial = JSON.parse((await f.call(['limits', '--json'])).stdout);
   assert.equal(initial.revision, 3);
-  assert.equal(initial.enforcement, 'unavailable');
+  assert.equal(initial.enforcement, 'models');
   const updated = JSON.parse(
     (await f.call(['limits', '--tokens', '100000', '--models', 'provider/model', '--control', 'approve', '--json']))
       .stdout,

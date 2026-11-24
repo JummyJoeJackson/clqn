@@ -260,7 +260,7 @@ export function chatFrame(view: View): Frame {
   const approvalKey = view.approvalFocused ? '› y/n' : '◆ F3';
   const approvalPrefix = `${approvalKey}  Spawn · `;
   const approvalSuffix = pending
-    ? ` · ${number(pending.estimatedTokens)} est.${count > 1 ? `  (${view.approval + 1}/${count})` : ''}`
+    ? `${pending.model ? ` · ${plain(pending.model)}` : ''} · ${number(pending.estimatedTokens)} est.${count > 1 ? `  (${view.approval + 1}/${count})` : ''}`
     : '';
   const attention = [
     pending

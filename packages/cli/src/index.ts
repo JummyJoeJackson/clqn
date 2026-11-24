@@ -455,7 +455,7 @@ const policyOutput = (value: Awaited<ReturnType<ClqnClient['policy']>>) =>
     `Policy revision ${value.revision} for ${value.userId} in ${value.clanId}\n` +
       `Token limit: ${value.tokenLimit ?? 'none'} (total input + output across your agents in this clan)\n` +
       `Allowed models: ${value.allowedModels?.join(', ') ?? 'any'}\nLeader control: ${value.control}\n` +
-      'Saved preferences only. Runtime enforcement is unavailable; this does not grant execution access.',
+      'Allowed models are enforced when the orchestrator delegates to your agents; this does not grant execution access.',
   );
 interface LimitOptions {
   clan?: string;
@@ -486,12 +486,13 @@ const setLimits = async (options: LimitOptions) => {
   const current = await api.policy(clanId);
   policyOutput(await api.updatePolicy(clanId, { ...changes, expectedRevision: current.revision } as UpdatePolicy));
 };
-configureLimits(
-  program.command('limits').description('Show or change your saved agent limits (not yet enforced)'),
-).action(async (options: LimitOptions) => {
-  if ([options.tokens, options.models, options.control].some((value) => value !== undefined)) return setLimits(options);
-  policyOutput(await (await client()).policy(await selectedClan(options)));
-});
+configureLimits(program.command('limits').description('Show or change your agent limits')).action(
+  async (options: LimitOptions) => {
+    if ([options.tokens, options.models, options.control].some((value) => value !== undefined))
+      return setLimits(options);
+    policyOutput(await (await client()).policy(await selectedClan(options)));
+  },
+);
 const agent = program.command('agent').description('Register, run, and list agents');
 const agentLabel = (entry: Agent) =>
   entry.alias && entry.name !== entry.alias ? `${entry.name} (${entry.alias})` : entry.name;
