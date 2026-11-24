@@ -82,6 +82,7 @@ async function workspaceFixture(t: TestContext) {
     email: 'bob@example.com',
     expiresAt: '2026-11-21T12:00:00.000Z',
   };
+  const pending = [{ clanId: clan.id, clanName: clan.name, expiresAt: invitation.expiresAt }];
   const requests: { path: string | undefined; authorization: string | undefined }[] = [];
   const token = 'clqn_example_secret';
   const server = createServer(async (request, response) => {
@@ -114,6 +115,12 @@ async function workspaceFixture(t: TestContext) {
       assert.deepEqual(JSON.parse(body), { email: invitation.email });
       response.writeHead(201);
       response.end(JSON.stringify(invitation));
+    } else if (request.url === '/v1/invitations') response.end(JSON.stringify({ invitations: pending }));
+    else if (request.url === '/v1/invitations/accept' && request.method === 'POST') {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      assert.deepEqual(JSON.parse(body), { clanId: clan.id });
+      response.end(JSON.stringify(clan));
     } else if (request.url === '/v1/invitations/join' && request.method === 'POST') {
       let body = '';
       for await (const chunk of request) body += chunk;
@@ -138,14 +145,19 @@ async function workspaceFixture(t: TestContext) {
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   // Leave CLQN_TOKEN absent by default so persisted credentials are exercised.
-  const call = (args: string[], options: { env?: Record<string, string>; input?: string } = {}) => {
+  const call = (
+    args: string[],
+    options: { env?: Record<string, string>; input?: string; useSavedServer?: boolean } = {},
+  ) => {
     const environment: NodeJS.ProcessEnv = { ...process.env, CLQN_CONFIG_DIR: directory, ...options.env };
     if (!options.env || !Object.hasOwn(options.env, 'CLQN_TOKEN')) delete environment.CLQN_TOKEN;
-    const result = run(process.execPath, [...sourceNodeArgs, cli, '--api-url', url, ...args], { env: environment });
+    if (!options.env || !Object.hasOwn(options.env, 'CLQN_API_URL')) delete environment.CLQN_API_URL;
+    const server = options.useSavedServer ? [] : ['--api-url', url];
+    const result = run(process.execPath, [...sourceNodeArgs, cli, ...server, ...args], { env: environment });
     result.child.stdin?.end(options.input);
     return result;
   };
-  return { call, directory, user, clan, members, invitation, token, requests, url };
+  return { call, directory, user, clan, members, invitation, pending, token, requests, url };
 }
 
 test('CLI marks revoked agents in the agent list', async (t) => {
@@ -159,13 +171,33 @@ test('CLI marks revoked agents in the agent list', async (t) => {
 test('CLI invitations normalize email, support an explicit clan, and joining selects the clan', async (t) => {
   const f = await workspaceFixture(t);
   await f.call(['login'], { input: f.token });
+  const { code, ...invitation } = f.invitation;
   assert.deepEqual(
     JSON.parse((await f.call(['invite', ' Bob@Example.com ', '--clan', f.clan.id, '--json'])).stdout),
-    f.invitation,
+    invitation,
   );
-  assert.deepEqual(JSON.parse((await f.call(['join', f.invitation.code, '--json'])).stdout), f.clan);
+  assert.doesNotMatch((await f.call(['invite', f.invitation.email, '--clan', f.clan.id])).stdout, /clqn_inv_/);
+  assert.deepEqual(JSON.parse((await f.call(['join', '--list', '--json'])).stdout), { invitations: f.pending });
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations');
+  assert.deepEqual(JSON.parse((await f.call(['join', '--json'])).stdout), f.clan);
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations/accept');
   assert.deepEqual(JSON.parse((await f.call(['members', '--json'])).stdout), f.members);
-  assert.deepEqual(JSON.parse((await f.call(['invite', f.invitation.email, '--json'])).stdout), f.invitation);
+  assert.deepEqual(JSON.parse((await f.call(['invite', f.invitation.email, '--code', '--json'])).stdout), f.invitation);
+  assert.deepEqual(JSON.parse((await f.call(['join', code, '--json'])).stdout), f.clan);
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations/join');
+});
+
+test('CLI lists multiple invitations and can join one by name', async (t) => {
+  const f = await workspaceFixture(t);
+  await f.call(['login'], { input: f.token });
+  f.pending.push({ ...f.pending[0]!, clanId: f.user.id, clanName: 'Other project' });
+  const { stdout } = await f.call(['join']);
+  assert.match(stdout, /Pending invitations:\nMy project\nOther project/);
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations');
+  assert.deepEqual(JSON.parse((await f.call(['join', 'my project', '--json'])).stdout), f.clan);
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations/accept');
+  f.pending[1]!.clanName = f.clan.name;
+  await assert.rejects(f.call(['join', f.clan.name]), /Several pending invitations have that name/);
 });
 
 test('CLI removes members and transfers leadership by email, and leaving clears the selected clan', async (t) => {
@@ -190,7 +222,7 @@ test('CLI rejects malformed invitation input before making an HTTP request', asy
   for (const args of [
     ['invite', 'bob@example.com'],
     ['invite', 'invalid-email', '--clan', f.clan.id],
-    ['join', 'invalid-code'],
+    ['join', ' '],
   ]) {
     await assert.rejects(f.call([...args, '--json']), (thrown) => {
       const error = thrown as ExecError;
@@ -209,7 +241,7 @@ test('CLI login, clan creation, membership, and logout persist API-scoped privat
   assert.deepEqual(JSON.parse(loggedIn.stdout), f.user);
   assert.equal(loggedIn.stderr, '');
   assert.ok(!loggedIn.stdout.includes(f.token));
-  const [filename] = await readdir(f.directory);
+  const filename = (await readdir(f.directory)).find((name) => name.endsWith('.json'));
   assert.ok(filename);
   assert.equal((await stat(f.directory)).mode & 0o777, 0o700);
   assert.equal((await stat(join(f.directory, filename))).mode & 0o777, 0o600);
@@ -222,6 +254,8 @@ test('CLI login, clan creation, membership, and logout persist API-scoped privat
   assert.match((await f.call(['whoami'])).stdout, /alice@example.com/);
   assert.deepEqual(JSON.parse((await f.call(['init', f.clan.name, '--json'])).stdout), f.clan);
   assert.deepEqual(JSON.parse((await f.call(['clans', '--json'])).stdout), { clans: [f.clan] });
+  assert.equal((await f.call(['clans'])).stdout, 'My project (current)\n');
+  assert.equal((await f.call(['use', 'my project'])).stdout, 'Using My project.\n');
   assert.deepEqual(JSON.parse((await f.call(['members', '--json'])).stdout), f.members);
   assert.deepEqual(JSON.parse((await f.call(['members', '--clan', f.clan.id, '--json'])).stdout), f.members);
   assert.match((await f.call(['members'])).stdout, /alice@example.com  leader/);
@@ -238,7 +272,7 @@ test('CLI login, clan creation, membership, and logout persist API-scoped privat
   const logout = JSON.parse((await f.call(['logout', '--json'])).stdout);
   assert.deepEqual(logout, { credentialsRemoved: true, tokenRevoked: true, environmentTokenActive: false });
   assert.deepEqual(f.requests.at(-1), { path: '/v1/logout', authorization: `Bearer ${f.token}` });
-  assert.deepEqual(await readdir(f.directory), []);
+  assert.deepEqual(await readdir(f.directory), ['server']);
   await assert.rejects(f.call(['whoami', '--json']), (thrown) => {
     const error = thrown as ExecError;
     assert.equal(error.code, 1);
@@ -285,4 +319,30 @@ test('login requires token input and members requires a selected clan', async (t
     });
   }
   assert.equal(f.requests.length, 0);
+});
+
+test('login --server saves the origin for later commands and accepts provisioning JSON from stdin', async (t) => {
+  const { readFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const f = await workspaceFixture(t);
+  const explicitLogin = (url: string, token: string) =>
+    f.call(['login', '--server', url, '--json'], {
+      input: JSON.stringify({ token, user: f.user, credentialId: f.user.id }),
+      useSavedServer: true,
+    });
+  const login = await explicitLogin(`${f.url}/ignored?setup=1`, f.token);
+  assert.deepEqual(JSON.parse(login.stdout), f.user);
+  assert.equal(login.stderr, '');
+  assert.ok(!login.stdout.includes(f.token));
+  assert.equal((await readFile(join(f.directory, 'server'), 'utf8')).trim(), f.url);
+  const clans = await f.call(['clans', '--json'], { useSavedServer: true });
+  assert.deepEqual(JSON.parse(clans.stdout), { clans: [f.clan] });
+
+  const other = await workspaceFixture(t);
+  await assert.rejects(explicitLogin(other.url, 'invalid_token'));
+  assert.equal((await readFile(join(f.directory, 'server'), 'utf8')).trim(), f.url);
+  await assert.rejects(f.call(['whoami', '--json'], { useSavedServer: true, env: { CLQN_API_URL: other.url } }));
+  assert.equal(other.requests.at(-1)?.authorization, undefined);
+  const who = await f.call(['whoami', '--json'], { useSavedServer: true });
+  assert.deepEqual(JSON.parse(who.stdout), f.user);
 });

@@ -159,9 +159,14 @@ test('invitation routes validate bodies, forward verified identity, and hide ina
         assert.equal(email, 'bob@example.com');
         return undefined;
       },
+      listInvitations: async (actor) => {
+        assert.deepEqual(actor, alice);
+        return [{ clanId: alice.id, clanName: 'Example', expiresAt: '2026-11-24T00:00:00.000Z' }];
+      },
       joinInvitation: async (user, received) => {
         assert.deepEqual(user, alice);
-        assert.equal(received, code);
+        if (typeof received === 'string') assert.equal(received, code);
+        else assert.deepEqual(received, { clanId: alice.id });
         return undefined;
       },
     }),
@@ -173,10 +178,29 @@ test('invitation routes validate bodies, forward verified identity, and hide ina
   for (const body of [{}, { email: 'bad' }, { email: 'bob@example.com', createdBy: alice.id }]) {
     assert.equal((await post(`/v1/clans/${alice.id}/invitations`, body)).status, 400);
   }
+  const pending = await app.request('/v1/invitations', { headers });
+  assert.deepEqual(await pending.json(), {
+    invitations: [{ clanId: alice.id, clanName: 'Example', expiresAt: '2026-11-24T00:00:00.000Z' }],
+  });
+  assert.equal((await post('/v1/invitations/accept', { clanId: alice.id })).status, 404);
+  assert.equal(
+    (await post('/v1/invitations/accept', { clanId: alice.id, email: 'different@example.com' })).status,
+    400,
+  );
   assert.equal((await post('/v1/invitations/join', { code })).status, 404);
   assert.equal((await post('/v1/invitations/join', { code: 'bad' })).status, 400);
   assert.equal(
     (await app.request('/v1/invitations/join', { method: 'POST', headers, body: 'x'.repeat(5000) })).status,
     413,
   );
+});
+
+test('agent credentials cannot list or accept invitations', async () => {
+  const app = createApp(
+    stub({
+      authenticate: async () => ({ ...alice, agentId: alice.id, clanId: alice.id }),
+    }),
+  );
+  assert.equal((await app.request('/v1/invitations', { headers })).status, 403);
+  assert.equal((await app.request('/v1/invitations/accept', { method: 'POST', headers })).status, 403);
 });

@@ -1,59 +1,26 @@
 # Getting started
 
-A clan is a shared workspace for people and their agents. [Install the CLI](../README.md#installation), then ask your operator for the API URL.
-
-## Sign in
-
-```sh
-export CLQN_API_URL="<operator-api-url>"
-clqn login --github
-clqn whoami
-```
-
-Follow the displayed GitHub URL and code. If GitHub login is disabled, ask your operator for a personal token and save it in a private file:
-
-```sh
-clqn login < /secure/path/to/personal-token
-```
+A clan is a shared workspace for people and their agents. [Install the CLI](../README.md#installation) to get started.
 
 ## Create or join a clan
 
+Install and sign in to Codex CLI or Claude Code. The leader creates a clan from the current folder and invites a teammate by email:
+
 ```sh
-clqn init "My project"
-clqn invite teammate@example.com
+clqn init --invite teammate@example.com --run
 ```
 
-Invited members sign in with their own account and run `clqn join <invite-code>`. Use `clqn members` to see who joined.
+The teammate opens their project folder and runs `clqn join --run`. If several invitations are pending, specify the clan, for example `clqn join "My project" --run`. On first use, both people follow the GitHub sign-in link. The teammate's GitHub account uses the invited email as its verified primary email.
+
+Hosted clqn is the default. For a self-hosted instance, both people sign in once with `clqn login --server <https-address>`. [Hosting guide](hosting.md)
 
 ## Connect an agent
 
-From your personal session, register an agent. Its token is shown once; `clqn clans` shows the clan ID.
+Use `clqn agent run` from your project clone or worktree to open a connected session. It uses the current clan and reuses a worker on this machine when available. If both runtimes are installed, clqn uses Codex. To choose Claude Code, use `clqn agent run --runtime claude` or `--run claude` on `init` or `join`.
 
-```sh
-clqn agent add codex --json
-```
+To register a named agent, run `clqn agent add codex --runtime codex`, then `clqn agent run codex`. The clan leader can add `--orchestrator` when registering the optional coordinator.
 
-Add this to your agent runtime's private MCP settings, replacing the placeholders:
-
-```json
-{
-  "mcpServers": {
-    "clqn": {
-      "command": "clqn",
-      "args": ["mcp", "--path", "/absolute/path/to/project"],
-      "env": {
-        "CLQN_API_URL": "<operator-api-url>",
-        "CLQN_TOKEN": "<agent-token>",
-        "CLQN_CLAN_ID": "<clan-id>"
-      }
-    }
-  }
-}
-```
-
-The runtime launches the local MCP server. Use your clone or worktree path; it defaults to the current directory. Registration alone does not launch an agent. Keep tokens out of source control.
-
-While connected, MCP [syncs clean main checkouts](repositories.md#automatically-sync-only-main). Task branches stay pinned.
+While connected, MCP [syncs clean main checkouts](repositories.md#automatically-sync-only-main). Task branches stay pinned. For a custom MCP client, see [manual agent configuration](authentication.md#custom-mcp-clients).
 
 ## Share context
 

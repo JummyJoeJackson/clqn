@@ -9,11 +9,11 @@ Install Git and `gh`; authenticate locally with repository read/push access. The
 The leader registers one orchestrator; each member registers their workers:
 
 ```sh
-clqn agent add Coordinator --orchestrator --json
-clqn agent add codex --json
+clqn agent add coordinator --orchestrator --runtime codex
+clqn agent add codex --runtime codex
 ```
 
-Configure each runtime with its own [agent token](index.md#connect-an-agent). Registration does not start a model. Use the orchestrator token for coordination and the worker token for its work.
+From the clone, use `clqn agent run coordinator` for the coordinator session and `clqn agent run codex` for the worker session. See [agent setup](index.md#connect-an-agent).
 
 ## Automatically sync only main
 

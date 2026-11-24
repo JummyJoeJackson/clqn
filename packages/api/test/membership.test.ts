@@ -6,7 +6,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import { createApp } from '../src/app.js';
-import { createStore } from '../src/db/store.js';
+import { createStore, hashToken } from '../src/db/store.js';
 
 test('PostgreSQL: leaders remove members or hand off leadership, members leave, and agent tokens never outlive membership', {
   skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
@@ -45,16 +45,37 @@ test('PostgreSQL: leaders remove members or hand off leadership, members leave, 
     });
   const me = (token: string) => app.request('/v1/me', { headers: { authorization: `Bearer ${token}` } });
   const clan = await (await post(alice.token, '/v1/clans', { name: 'Membership' })).json();
+  const invite = async (user: typeof bob) => {
+    const response = await post(alice.token, `/v1/clans/${clan.id}/invitations`, { email: user.user.email });
+    assert.equal(response.status, 201);
+    return response.json();
+  };
+  const pending = (token: string) => app.request('/v1/invitations', { headers: { authorization: `Bearer ${token}` } });
+  const accept = (token: string) => post(token, '/v1/invitations/accept', { clanId: clan.id });
   const join = async (user: typeof bob) => {
-    const invitation = await (
-      await post(alice.token, `/v1/clans/${clan.id}/invitations`, { email: user.user.email })
-    ).json();
+    const invitation = await invite(user);
     assert.equal((await post(user.token, '/v1/invitations/join', { code: invitation.code })).status, 200);
   };
-  await join(bob);
+  const firstBobInvite = await invite(bob);
+  const secondBobInvite = await invite(bob);
+  assert.deepEqual(await (await pending(alice.token)).json(), { invitations: [] });
+  assert.equal((await accept(carol.token)).status, 404);
+  assert.deepEqual(await (await pending(bob.token)).json(), {
+    invitations: [{ clanId: clan.id, clanName: clan.name, expiresAt: secondBobInvite.expiresAt }],
+  });
+  const joins = await Promise.all([accept(bob.token), accept(bob.token)]);
+  // Accepting consumes both invitations, so the concurrent duplicate finds nothing left.
+  assert.deepEqual(joins.map((response) => response.status).sort(), [200, 404]);
+  assert.deepEqual(await (await pending(bob.token)).json(), { invitations: [] });
+  const expired = await invite(carol);
+  await sql`update invitations set expires_at = now() - interval '1 second' where code_hash = ${hashToken(expired.code)}`;
+  assert.equal((await accept(carol.token)).status, 404);
+  assert.deepEqual(await (await pending(carol.token)).json(), { invitations: [] });
   await join(carol);
   const remove = (token: string, userId: string) => post(token, `/v1/clans/${clan.id}/members/${userId}/remove`);
   const bobAgent = await (await post(bob.token, `/v1/clans/${clan.id}/agents`, { name: 'Codex' })).json();
+  assert.equal((await pending(bobAgent.token)).status, 403);
+  assert.equal((await accept(bobAgent.token)).status, 403);
   // Only the leader removes others; agents cannot; the leader cannot leave or be removed.
   assert.equal((await remove(carol.token, bob.user.id)).status, 403);
   assert.equal((await remove(bobAgent.token, carol.user.id)).status, 403);
@@ -71,6 +92,9 @@ test('PostgreSQL: leaders remove members or hand off leadership, members leave, 
     (await app.request(`/v1/clans/${clan.id}/members`, { headers: { authorization: `Bearer ${bob.token}` } })).status,
     404,
   );
+  assert.equal((await accept(bob.token)).status, 404);
+  assert.equal((await post(bob.token, '/v1/invitations/join', { code: firstBobInvite.code })).status, 404);
+  assert.deepEqual(await (await pending(bob.token)).json(), { invitations: [] });
   await join(bob);
   assert.equal((await me(bobAgent.token)).status, 401);
   // Members can leave on their own.

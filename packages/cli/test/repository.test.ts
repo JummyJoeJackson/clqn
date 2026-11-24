@@ -326,9 +326,7 @@ test('whoami keeps human identity and includes agent registration for agent cred
     agent: { id: agentId, ownerId: userId, clanId, name: 'Worker', role: 'worker', createdAt: initialTask.createdAt },
   });
   const output = (await scoped.call(['whoami'])).stdout;
-  for (const value of ['Worker', agentId, 'role=worker', `clan=${clanId}`, `owner=${userId}`, human.email]) {
-    assert.ok(output.includes(value));
-  }
+  assert.equal(output, `Worker (worker)\nSigned in for ${human.email}\n`);
   assert.deepEqual(
     scoped.requests.map((request) => request.path),
     ['/v1/me', '/v1/agent', '/v1/me', '/v1/agent'],

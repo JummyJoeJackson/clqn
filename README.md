@@ -33,7 +33,6 @@ Install with npm (Node.js 22.12+):
 
 ```sh
 npm install -g clqn-cli
-clqn --help
 ```
 
 Alternatively, install with Homebrew:
@@ -43,66 +42,39 @@ brew tap rli8145/clqn https://github.com/rli8145/clqn
 brew install clqn
 ```
 
-### Try it locally
+## Quick start
 
-With Docker, run a private API from a clone of this repository and sign in to it:
-
-```sh
-git clone https://github.com/rli8145/clqn && cd clqn
-docker compose --profile server up --build -d --wait
-docker compose exec api node packages/api/dist/manage-user.js create you@example.com   # prints a one-time token
-export CLQN_API_URL=http://127.0.0.1:8080
-printf '%s' '<token>' | clqn login
-clqn init "My project"
-```
-
-See [hosting](docs/hosting.md) to share it with teammates over HTTPS.
-
-## Usage
-
-### 1. Sign in and create a clan
-
-Use the API URL from your clan operator, or [self-host one with Docker Compose](docs/hosting.md#self-host-with-docker-compose) in one command.
+Install and sign in to Codex CLI or Claude Code. From your project folder, create a clan, invite your teammate, and open your agent:
 
 ```sh
-export CLQN_API_URL="<operator-api-url>"
-clqn login --github
-clqn init "My project"
-clqn invite teammate@example.com
+clqn init --invite teammate@example.com --run
 ```
 
-Invited? Sign in and run `clqn join <invite-code>`.
-
-### 2. Connect your agents
-
-The leader registers the orchestrator (optional but recommended). Otherwise, the leader supervises worker agents manually. A strong reasoning model is recommended for the orchestrator. Each member registers their own workers.
+Your teammate runs this from their project folder to join and open their agent:
 
 ```sh
-clqn agent add Coordinator --orchestrator
-clqn agent add codex
+clqn join --run
 ```
 
-Connect each agent to MCP using its returned token: [agent setup](docs/index.md#connect-an-agent).
+The first command on each machine prompts for GitHub sign-in. Follow the link and enter GitHub's short code. Use the GitHub account with the invited email. With several pending invitations, name the clan, for example `clqn join "My project" --run`.
 
-Save token limits, allowed models, and approval preferences for your agents. These are recorded for the clan but [not enforced yet](docs/policies.md):
+`clqn init` uses the folder name for the clan. Leave off `--run` to create or join first, then use `clqn agent run` whenever you want a connected session. If both runtimes are installed, use `--run claude` to choose Claude Code. [Agent setup](docs/index.md#connect-an-agent)
 
-```sh
-clqn limits --tokens 100000 --models provider/model --control approve
-```
+`clqn clans` shows your clans, and `clqn use "My project"` switches between them. Hosted clqn keeps your members, tasks, and shared context available to your team. For self-hosted teams, sign in once with `clqn login --server <https-address>`. [Hosting guide](docs/hosting.md)
 
-### 3. Share context and coordinate work
+## Share context and coordinate work
 
 ```sh
 printf 'Run npm test before committing.\n' | clqn context write conventions --expected-revision 0
 clqn context read conventions
 ```
 
-For code tasks, run from your project clone with Git and an authenticated GitHub CLI (`gh`). Each agent uses its own credentials.
+For code tasks, run from your project clone with Git and an authenticated GitHub CLI (`gh`). Use `clqn agent list` to find the worker’s alias. The clan leader can register an optional coordinator with `clqn agent add coordinator --orchestrator`.
 
 ```sh
 # Orchestrator
 clqn task add login-fix --code
-clqn task assign login-fix --agent codex
+clqn task assign login-fix --agent codex-teammate
 
 # Worker
 clqn task start login-fix
@@ -122,7 +94,7 @@ As the leader, run `clqn repo link` once to set up the [GitHub webhook](docs/web
 
 Use `--alias` if you want a longer agent name or task description with a separate short name. See [custom aliases](docs/commands.md#custom-aliases).
 
-### 4. Follow progress
+### Follow progress
 
 ```sh
 clqn status
@@ -130,6 +102,19 @@ clqn log
 ```
 
 Use `clqn --help` to explore all commands. Add `--json` for scripting.
+
+## Run your own server
+
+Clone this repository and open a terminal in the clone. Docker Compose starts the clqn server and its database on your machine. The second command creates and signs in to a local account in one step.
+
+```sh
+docker compose --profile server up --build -d --wait
+docker compose exec -T api node packages/api/dist/manage-user.js create you@example.com \
+  | clqn login --server http://127.0.0.1:8080
+clqn init "My project"
+```
+
+To set up a shared server and enable GitHub sign-in for your team, follow the [hosting guide](docs/hosting.md).
 
 ## Documentation
 

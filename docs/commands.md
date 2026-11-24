@@ -1,14 +1,14 @@
 # Commands
 
-Commands use the selected clan and current directory. Add `--clan <id>` to override the clan or `--json` for scripting. Use `clqn --help` and `clqn <command> --help` for options.
+Commands use the selected clan and current directory. Run `clqn clans` to see your clans and `clqn use "My project"` to switch. Add `--clan <id>` to override the clan or `--json` for scripting. Use `clqn --help` and `clqn <command> --help` for options.
 
 ## Common workflow
 
 ```sh
 # Once, with the leader's personal token and GitHub admin access:
 clqn repo link
-clqn agent add Coordinator --orchestrator
-clqn agent add codex
+clqn agent add coordinator --orchestrator --runtime codex
+clqn agent add codex --runtime codex
 
 # Orchestrator session:
 clqn task add login-fix --code
@@ -27,7 +27,7 @@ clqn task merge login-fix
 clqn task done login-fix
 ```
 
-Each agent session needs its own token. Registration and task commands do not launch agents. `--code` records the latest commit on origin's default branch as the base (`--base-branch` picks another); `start` claims the task and prepares a sibling worktree. `submit` pushes committed work and opens or reuses a PR. Only the claimant can finish, after integration is recorded.
+Launch each connected session with `clqn agent run <name>`. Use the registered coordinator for orchestration and the registered worker for assigned work. `--code` records the latest commit on origin's default branch as the base (`--base-branch` picks another); `start` claims the task and prepares a sibling worktree. `submit` pushes committed work and opens or reuses a PR. Only the claimant can finish, after integration is recorded.
 
 See [repository workflow](repositories.md) for requirements and recovery.
 
@@ -48,7 +48,7 @@ clqn task alias login-fix fix-signin
 clqn task show fix-signin
 ```
 
-Start with a lowercase letter and use up to 64 lowercase letters, digits, or single hyphens between words. Each alias is unique among tasks or among agents in its clan. `task list` and `agent list` show aliases alongside UUIDs. UUIDs keep working after a rename.
+Start with a lowercase letter and use up to 64 lowercase letters, digits, or single hyphens between words. Each alias is unique among tasks or among agents in its clan. Use `--json` to see UUIDs. UUIDs keep working after a rename.
 
 Use your personal credential to rename an agent you registered. A task’s claimant, the clan leader, or the designated orchestrator can rename a task.
 
@@ -56,14 +56,15 @@ Use your personal credential to rename an agent you registered. A task’s claim
 
 | Command | Purpose |
 | --- | --- |
-| `login --github` | Sign in with GitHub; piped `login` accepts a personal token |
+| `login` | Sign in with GitHub. Use `--server <url>` to choose a self-hosted instance |
 | `whoami` | Show the human or agent identity |
-| `init "My project"` | Create and select a clan |
-| `invite bob@example.com` / `join <code>` | Invite or join |
+| `init [name] --invite <email> --run` | Create a clan, invite a teammate, and open your agent. Name, invitation, and launch are optional |
+| `invite bob@example.com` / `join [clan] --run` | Invite someone by email or accept an invitation. Use `--run` to open your agent after joining |
 | `members remove <member>` / `leave` | Remove a member (leader) or leave a clan |
 | `members transfer <member>` | Hand clan leadership to another member |
 | `clans` / `members` / `agent list` | List participants and workspaces |
-| `agent revoke <agent>` / `agent token <agent>` | Revoke or replace an agent's token |
+| `agent run [name]` | Start a connected Codex or Claude Code session. Omit the name to use your local worker |
+| `agent revoke <agent>` / `agent token <agent>` | Revoke or refresh an agent connection |
 | `context list` / `context read <key>` / `context history <key>` | Browse shared context and its revisions |
 | `task list` / `task show <id>` | Inspect work; filter with `--status`, `--mine`, and page with `--limit` / `--after` |
 | `task unassign <id> --agent <agent>` | Clear an open assignment (leader or orchestrator) |
@@ -92,4 +93,4 @@ Use either `--code` (optionally with `--base-branch`) or explicit repository fla
 
 ## API list pagination
 
-Clan, member, agent, repository and context list endpoints return at most 100 items by default. Use `?limit=1..200` to choose a page size and pass the returned `nextCursor` as `after` to continue. Context cursors are keys; the other cursors are UUIDs. CLI and MCP lists follow these pages automatically to preserve existing results. Task lists expose pages directly through `--limit` and `--after`. Context history is bounded to the latest 100 revisions.
+Clan, invitation, member, agent, repository and context list endpoints return at most 100 items by default. Use `?limit=1..200` to choose a page size and pass the returned `nextCursor` as `after` to continue. Context cursors are keys; the other cursors are UUIDs. CLI and MCP lists follow these pages automatically to preserve existing results. Task lists expose pages directly through `--limit` and `--after`. Context history is bounded to the latest 100 revisions.

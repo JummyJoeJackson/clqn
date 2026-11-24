@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { type Actor, type Agent, ApiError, type Clan, type PageQuery, type User } from '@clqn/shared';
-import { and, count, eq, gt, inArray, isNull, sql as query } from 'drizzle-orm';
+import { type Actor, type Agent, ApiError, type Clan, type PageQuery, type PendingInvitation } from '@clqn/shared';
+import { and, count, desc, eq, gt, inArray, isNull, sql as query } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { appendEvent, lockClan, requireClan, requirePersonal } from '../lib/access.js';
@@ -16,7 +16,8 @@ export interface WorkspaceStore {
     clanId: string,
     email: string,
   ): Promise<{ code: string; clanId: string; email: string; expiresAt: string } | undefined>;
-  joinInvitation(user: User, code: string): Promise<Clan | undefined>;
+  listInvitations(actor: Actor, page: PageQuery): Promise<PendingInvitation[]>;
+  joinInvitation(actor: Actor, reference: string | { clanId: string }): Promise<Clan | undefined>;
   registerAgent(
     actor: Actor,
     clanId: string,
@@ -41,6 +42,13 @@ export interface WorkspaceStore {
   removeMember(actor: Actor, clanId: string, userId: string): Promise<void>;
   transferLeadership(actor: Actor, clanId: string, userId: string): Promise<void>;
 }
+
+const pendingFor = (email: string) =>
+  and(
+    eq(schema.invitations.email, email),
+    isNull(schema.invitations.consumedAt),
+    gt(schema.invitations.expiresAt, query`now()`),
+  );
 
 export function createStore(url: string, poolSize = 10) {
   const sql = postgres(url, { max: poolSize });
@@ -234,7 +242,8 @@ export function createStore(url: string, poolSize = 10) {
               eq(schema.memberships.userId, userId),
               eq(schema.memberships.role, 'leader'),
             ),
-          );
+          )
+          .for('share');
         if (!leader) return undefined;
         const code = `clqn_inv_${randomBytes(32).toString('base64url')}`;
         const [invitation] = await tx
@@ -252,29 +261,52 @@ export function createStore(url: string, poolSize = 10) {
         return { code, clanId, email, expiresAt: invitation.expiresAt.toISOString() };
       });
     },
-    async joinInvitation(user, code) {
+    async listInvitations(actor, page) {
+      requirePersonal(actor);
+      const invitations = await db
+        .selectDistinctOn([schema.invitations.clanId], {
+          clanId: schema.invitations.clanId,
+          clanName: schema.clans.name,
+          expiresAt: schema.invitations.expiresAt,
+        })
+        .from(schema.invitations)
+        .innerJoin(schema.clans, eq(schema.clans.id, schema.invitations.clanId))
+        .leftJoin(
+          schema.memberships,
+          and(eq(schema.memberships.clanId, schema.invitations.clanId), eq(schema.memberships.userId, actor.id)),
+        )
+        .where(
+          and(
+            pendingFor(actor.email),
+            isNull(schema.memberships.userId),
+            page.after ? gt(schema.invitations.clanId, page.after) : undefined,
+          ),
+        )
+        .orderBy(schema.invitations.clanId, desc(schema.invitations.expiresAt))
+        .limit(page.limit + 1);
+      return invitations.map((invitation) => ({ ...invitation, expiresAt: invitation.expiresAt.toISOString() }));
+    },
+    async joinInvitation(actor, reference) {
+      requirePersonal(actor);
       return db.transaction(async (tx) => {
-        // The conditional update locks and consumes exactly one valid invitation. All writes roll back together.
+        // Accepting by clan consumes every pending invitation for it, so no duplicate outlives the membership.
+        const match =
+          typeof reference === 'string'
+            ? eq(schema.invitations.codeHash, hashToken(reference))
+            : eq(schema.invitations.clanId, reference.clanId);
         const [invitation] = await tx
           .update(schema.invitations)
           .set({ consumedAt: query`now()` })
-          .where(
-            and(
-              eq(schema.invitations.codeHash, hashToken(code)),
-              eq(schema.invitations.email, user.email),
-              isNull(schema.invitations.consumedAt),
-              gt(schema.invitations.expiresAt, query`now()`),
-            ),
-          )
-          .returning();
+          .where(and(match, pendingFor(actor.email)))
+          .returning({ clanId: schema.invitations.clanId });
         if (!invitation) return undefined;
         const [membership] = await tx
           .insert(schema.memberships)
-          .values({ clanId: invitation.clanId, userId: user.id })
+          .values({ clanId: invitation.clanId, userId: actor.id })
           .onConflictDoNothing()
           .returning();
         if (!membership) throw new ApiError(409, 'ALREADY_MEMBER', 'You are already a member of this clan');
-        await appendEvent(tx, { clanId: invitation.clanId, actorId: user.id, type: 'member.joined' });
+        await appendEvent(tx, { clanId: invitation.clanId, actorId: actor.id, type: 'member.joined' });
         const [clan] = await tx.select().from(schema.clans).where(eq(schema.clans.id, invitation.clanId));
         if (!clan) throw new Error('Invitation clan not found');
         return clanView(clan);
@@ -304,6 +336,10 @@ export function createStore(url: string, poolSize = 10) {
     async removeMember(actor, clanId, userId) {
       requirePersonal(actor);
       await db.transaction(async (tx) => {
+        const [user] = await tx
+          .select({ email: schema.users.email })
+          .from(schema.users)
+          .where(eq(schema.users.id, userId));
         const leaving = userId === actor.id;
         // Lock the actor's row so a concurrent leadership transfer cannot leave a stale leader check.
         const membership = await requireClan(tx, actor, clanId, leaving ? 'update' : 'share');
@@ -318,6 +354,13 @@ export function createStore(url: string, poolSize = 10) {
         if (!target) throw new ApiError(404, 'NOT_FOUND', 'Member not found');
         if (target.role === 'leader')
           throw new ApiError(409, 'LEADER_REQUIRED', 'The clan leader cannot leave or be removed');
+        // Pending invitations must not let removed members reinstate their own access.
+        if (user) {
+          await tx
+            .update(schema.invitations)
+            .set({ consumedAt: query`now()` })
+            .where(and(eq(schema.invitations.clanId, clanId), pendingFor(user.email)));
+        }
         // Delete agent tokens too, so a later invitation cannot revive them.
         const owned = tx
           .select({ id: schema.agents.id })
