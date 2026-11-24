@@ -114,7 +114,7 @@ test('PostgreSQL: only a personal leader registers one orchestrator per clan und
   for (const [adminPath, body] of <[string, object][]>[
     [path, { name: 'Child', role: 'worker' }],
     [`/v1/clans/${clan.id}/invitations`, { email: bob.user.email }],
-    [`/v1/clans/${clan.id}/policy`, { expectedRevision: 0, control: 'automatic' }],
+    [`/v1/clans/${clan.id}/chat/settings`, { approval: 'automatic', tokenLimit: null, agentLimit: null }],
   ])
     assert.equal((await post(orchestrator.token, adminPath, body)).status, 403);
   const list = await connection.store.listAgents(alice.user, clan.id);

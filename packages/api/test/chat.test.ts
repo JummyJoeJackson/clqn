@@ -196,11 +196,14 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
   assert.deepEqual((await state(member.token)).usage, { tokens: 20, reserved: 0, agents: 0 });
   assert.equal((await approve(member.token, tooLarge, false)).status, 200);
 
-  // Model limits come from the worker owner's policy and are rechecked when the owner approves.
-  assert.equal((await chat(member.token, '/join', { ...defaultChatSettings, tokenLimit: null })).status, 200);
-  const policy = (allowedModels: string[] | null, expectedRevision: number) =>
-    request(member.token, '/policy', { allowedModels, expectedRevision });
-  assert.equal((await policy(['model-a', 'model-b'], 0)).status, 200);
+  // Model limits come from the worker owner's chat settings and are rechecked when the owner approves.
+  // A join without allowedModels (an older client) keeps the saved models.
+  const models = (allowedModels: string[] | null) =>
+    chat(member.token, '/settings', { ...defaultChatSettings, allowedModels });
+  assert.equal((await models(['model-a', 'model-b'])).status, 200);
+  const { allowedModels: _omitted, ...olderClient } = defaultChatSettings;
+  const kept = await chat(member.token, '/join', olderClient);
+  assert.deepEqual((await kept.json()).allowedModels, ['model-a', 'model-b']);
   const modelTask = (msg: SendChat, workerId: string, model?: string) =>
     decision(msg, { action: 'delegate', title: msg.text, description: msg.text, workerId, estimatedTokens: 5, model });
   const first = await send(member.token, 'Use the default model');
@@ -227,7 +230,7 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
     [first.id, 'model-a'],
     [second.id, 'model-b'],
   ]);
-  assert.equal((await policy(['model-b'], 1)).status, 200);
+  assert.equal((await models(['model-b'])).status, 200);
   const revoked = await approve(member.token, first);
   assert.equal(revoked.status, 409);
   assert.match(await revoked.text(), /not in your allowed models \(model-b\)/);
@@ -235,7 +238,7 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
   assert.equal((await state(member.token)).runs.find(({ messageId }) => messageId === second.id)?.model, 'model-b');
   assert.equal((await approve(member.token, first, false)).status, 200);
 
-  assert.equal((await policy(null, 2)).status, 200);
+  assert.equal((await models(null)).status, 200);
   const anyModel = await send(member.token, 'Any model works');
   assert.equal((await modelTask(anyModel, worker.agent.id, 'vendor/new-model')).status, 200);
   const defaultModel = await send(member.token, 'No model chosen');

@@ -28,14 +28,14 @@ export const chats = pgTable('chats', {
 export const chatMembers = pgTable(
   'chat_members',
   {
-    clanId: uuid('clan_id')
-      .notNull()
-      .references(() => chats.clanId, { onDelete: 'cascade' }),
+    clanId: uuid('clan_id').notNull(),
     userId: uuid('user_id').notNull(),
     settings: jsonb('settings').$type<ChatSettings>().notNull(),
   },
+  // A member's limits, saved when they join the clan, before any session exists.
+  // With a session, the row also lets them use the chat.
   (table) => [
-    // Membership removal also removes the member's session settings.
+    // Membership removal also removes the member's settings.
     foreignKey({
       columns: [table.clanId, table.userId],
       foreignColumns: [memberships.clanId, memberships.userId],

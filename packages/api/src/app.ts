@@ -13,7 +13,6 @@ import { createContextRoutes } from './routes/context.js';
 import { createGithubLoginRoutes } from './routes/github-login.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createIdentityRoutes } from './routes/identity.js';
-import { createPolicyRoutes } from './routes/policy.js';
 import { createGithubWebhookRoutes, createRepositoryRoutes } from './routes/repositories.js';
 import { createTaskRoutes } from './routes/tasks.js';
 
@@ -84,7 +83,6 @@ export function createApp(
   if (db) {
     app.route('/v1/clans/:clanId/chat', createChatRoutes(db));
     app.route('/v1/clans/:clanId/repositories', createRepositoryRoutes(db, options.githubWebhookSecret));
-    app.route('/v1/clans/:clanId/policy', createPolicyRoutes(db));
     app.route('/v1/clans/:clanId/context', createContextRoutes(db));
     app.route('/v1/clans/:clanId/tasks', createTaskRoutes(db));
     app.route('/v1/clans/:clanId', createActivityRoutes(db));

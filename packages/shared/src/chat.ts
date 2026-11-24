@@ -1,15 +1,36 @@
 import { z } from 'zod';
-import { modelIdSchema, tokenLimitSchema } from './policy.js';
 
+export const limitSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
+export const modelIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine((model) => !/\s|\0/.test(model), 'Model identifiers cannot contain whitespace or NUL');
+export const allowedModelsSchema = z
+  .array(modelIdSchema)
+  .min(1)
+  .max(100)
+  .refine((models) => new Set(models).size === models.length, 'Model identifiers must be unique')
+  .nullable();
+// A member's own limits for agents on their machine, enforced before each delegation. Null means no limit.
 export const chatSettingsSchema = z
   .object({
     approval: z.enum(['manual', 'automatic']),
-    tokenLimit: tokenLimitSchema,
-    agentLimit: tokenLimitSchema,
+    tokenLimit: limitSchema,
+    agentLimit: limitSchema,
+    // Older servers and clients omit it.
+    allowedModels: allowedModelsSchema.default(null),
   })
   .strict();
 export type ChatSettings = z.infer<typeof chatSettingsSchema>;
-export const defaultChatSettings: ChatSettings = { approval: 'manual', tokenLimit: 50_000, agentLimit: 3 };
+// Full access: no token, agent, or model limits. Each delegation still needs the member's approval.
+export const defaultChatSettings: ChatSettings = {
+  approval: 'manual',
+  tokenLimit: null,
+  agentLimit: null,
+  allowedModels: null,
+};
 
 const chatText = z
   .string()

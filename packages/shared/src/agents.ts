@@ -35,9 +35,12 @@ export const agentRegistrationSchema = z.object({
   agent: agentSchema,
   token: z.string().regex(/^clqn_[A-Za-z0-9_-]{43}$/),
 });
-// `active` is false once an agent's token is revoked. Older servers omit it.
+// `active` is false once an agent's token is revoked. `allowedModels` are the owner's model limits; null allows any.
+// Older servers omit both.
 export const agentsSchema = z.object({
-  agents: z.array(agentSchema.extend({ active: z.boolean().optional() })),
+  agents: z.array(
+    agentSchema.extend({ active: z.boolean().optional(), allowedModels: z.array(z.string()).nullable().optional() }),
+  ),
   nextCursor: z.uuid().optional(),
 });
 export const revokedAgentSchema = z.object({ agent: agentSchema, revoked: z.literal(true) });

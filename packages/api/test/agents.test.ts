@@ -50,7 +50,7 @@ test('agent registration uses the authenticated owner, validates the name, and e
         return { agent, token };
       },
       agentStatus: async () => undefined,
-      listAgents: async () => [{ ...agent, active: true }],
+      listAgents: async () => [{ ...agent, active: true, allowedModels: null }],
     }),
   );
   const post = (body: object) =>
@@ -61,5 +61,5 @@ test('agent registration uses the authenticated owner, validates the name, and e
   }
   assert.equal((await app.request('/v1/agent', { headers })).status, 404);
   const list = await app.request(`/v1/clans/${clanId}/agents`, { headers });
-  assert.deepEqual(await list.json(), { agents: [{ ...agent, active: true }] });
+  assert.deepEqual(await list.json(), { agents: [{ ...agent, active: true, allowedModels: null }] });
 });

@@ -8,10 +8,6 @@ import {
 
 export * from './repositories.js';
 
-import { memberPolicySchema, type UpdatePolicy, updatePolicySchema } from './policy.js';
-
-export * from './policy.js';
-
 import { z } from 'zod';
 import { eventsSchema, statsSchema, statusSchema } from './activity.js';
 import {
@@ -237,6 +233,10 @@ export class ClqnClient {
       signal,
     );
   }
+  // Saves the member's limits without joining a session, for example right after joining a clan.
+  saveChatSettings(clanId: string, settings: ChatSettings) {
+    return this.request(`${this.chatPath(clanId)}/settings`, chatSettingsSchema, chatSettingsSchema.parse(settings));
+  }
   chatState(clanId: string, signal?: AbortSignal) {
     return this.request(`${this.chatPath(clanId)}/state`, chatStateSchema, undefined, signal);
   }
@@ -380,16 +380,6 @@ export class ClqnClient {
   }
   agentStatus() {
     return this.request('/v1/agent', agentSchema);
-  }
-  policy(clanId: string) {
-    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/policy`, memberPolicySchema);
-  }
-  updatePolicy(clanId: string, policy: UpdatePolicy) {
-    return this.request(
-      `/v1/clans/${encodeURIComponent(clanId)}/policy`,
-      memberPolicySchema,
-      updatePolicySchema.parse(policy),
-    );
   }
   linkRepository(clanId: string, slug: string) {
     return this.request(

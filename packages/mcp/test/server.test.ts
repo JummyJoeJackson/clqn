@@ -29,8 +29,6 @@ test('MCP discovers and calls the health tool through the protocol', async (t) =
   await client.connect(clientTransport);
   const { tools } = await client.listTools();
   assert.ok(tools.some((tool) => tool.name === 'clqn_list_agents' && tool.annotations?.readOnlyHint));
-  assert.ok(tools.some((tool) => tool.name === 'clqn_get_policy'));
-  assert.ok(!tools.some((tool) => /set_policy|update_policy/.test(tool.name)));
   assert.ok(tools.some((tool) => tool.name === 'clqn_get_status'));
   assert.ok(tools.some((tool) => tool.name === 'clqn_write_context'));
   const result = await client.callTool({ name: 'clqn_health', arguments: {} });
@@ -60,24 +58,19 @@ test('CLI stdio MCP process reaches the real HTTP API', async (t) => {
   assert.equal(resultJson(result).service, 'clqn-api');
 });
 
-test('MCP reads the owner policy without exposing policy mutation', async (t) => {
+test('MCP lists agents with their owners’ allowed models and has no policy tool', async (t) => {
   const clanId = 'e6faf7c5-0b04-45de-8eba-c1fda2a17a89';
-  const policy = {
-    tokenLimit: 1000,
-    allowedModels: ['provider/model'],
-    control: 'approve' as const,
-    enforcement: 'models' as const,
-  };
+  const agents = [{ id: clanId, name: 'Worker', allowedModels: ['provider/model'] }];
   const server = createMcpServer(
     stub({
-      policy: async (id) => {
+      listAgents: async (id) => {
         assert.equal(id, clanId);
-        return { ...policy, clanId, userId: clanId, revision: 0 };
+        return { agents } as unknown as Awaited<ReturnType<ClqnClient['listAgents']>>;
       },
     }),
     clanId,
   );
-  const client = new Client({ name: 'policy-test', version: '1.0.0' });
+  const client = new Client({ name: 'agents-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   t.after(async () => {
     await client.close();
@@ -85,9 +78,11 @@ test('MCP reads the owner policy without exposing policy mutation', async (t) =>
   });
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  const result = await client.callTool({ name: 'clqn_get_policy', arguments: {} });
+  const { tools } = await client.listTools();
+  assert.ok(!tools.some((tool) => /policy/.test(tool.name)));
+  const result = await client.callTool({ name: 'clqn_list_agents', arguments: {} });
   assert.equal(result.isError, undefined);
-  assert.deepEqual(resultJson(result), { ...policy, clanId, userId: clanId, revision: 0 });
+  assert.deepEqual(resultJson(result), { agents });
 });
 
 test('MCP forwards repository assignments and authenticated reports with the exact head revisions', async (t) => {

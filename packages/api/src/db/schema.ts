@@ -1,4 +1,3 @@
-import type { PolicySettings } from '@clqn/shared';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -7,7 +6,6 @@ import {
   check,
   index,
   integer,
-  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
@@ -46,8 +44,6 @@ export const memberships = pgTable(
       .notNull()
       .references(() => users.id),
     role: membershipRole('role').notNull().default('member'),
-    agentPolicy: jsonb('agent_policy').$type<PolicySettings>(),
-    policyRevision: integer('policy_revision').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

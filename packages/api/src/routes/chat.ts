@@ -6,9 +6,9 @@ import {
   chatMetricsWindowSchema,
   chatSettingsSchema,
   chatUsageSchema,
-  defaultChatSettings,
   sendChatSchema,
 } from '@clqn/shared';
+import { sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
@@ -46,6 +46,36 @@ function uuid(value: string) {
   return parsed.data;
 }
 
+// Older clients omit allowedModels; keep the saved models instead of removing them.
+async function parseSettings(c: Context) {
+  const body = await c.req.json().catch(() => null);
+  const parsed = chatSettingsSchema.safeParse(body);
+  if (!parsed.success) throw new ApiError(400, 'INVALID_REQUEST', 'Invalid chat request');
+  return { settings: parsed.data, keepModels: !(body && typeof body === 'object' && 'allowedModels' in body) };
+}
+
+// Upserting one row is atomic, so concurrent edits by the same member cannot mix fields; the last one wins.
+async function saveSettings(
+  db: WorkspaceDb,
+  clanId: string,
+  userId: string,
+  { settings, keepModels }: Awaited<ReturnType<typeof parseSettings>>,
+) {
+  const [saved] = await db
+    .insert(chatMembers)
+    .values({ clanId, userId, settings })
+    .onConflictDoUpdate({
+      target: [chatMembers.clanId, chatMembers.userId],
+      set: {
+        settings: keepModels
+          ? sql`${JSON.stringify(settings)}::jsonb || jsonb_build_object('allowedModels', coalesce(${chatMembers.settings} -> 'allowedModels', 'null'::jsonb))`
+          : settings,
+      },
+    })
+    .returning({ settings: chatMembers.settings });
+  return saved!.settings;
+}
+
 export function createChatRoutes(db: WorkspaceDb) {
   const app = new Hono<{ Variables: { user: Actor } }>();
   app.use(
@@ -60,35 +90,33 @@ export function createChatRoutes(db: WorkspaceDb) {
     const clanId = c.req.param('clanId')!;
     requirePersonal(actor);
     const membership = await requireClan(db, actor, clanId);
-    const policy = membership.agentPolicy;
-    const defaults = policy
-      ? {
-          ...defaultChatSettings,
-          tokenLimit: policy.tokenLimit,
-          approval: policy.control === 'automatic' ? ('automatic' as const) : ('manual' as const),
-        }
-      : defaultChatSettings;
-    return c.json(await chatInfo(db, clanId, actor.id, membership.role === 'leader', defaults));
+    return c.json(await chatInfo(db, clanId, actor.id, membership.role === 'leader'));
+  });
+  // Members save their own limits when joining the clan, before a session may exist. Only the member can edit them.
+  app.post('/settings', async (c) => {
+    const actor = c.get('user');
+    const clanId = c.req.param('clanId')!;
+    requirePersonal(actor);
+    const settings = await parseSettings(c);
+    return c.json(
+      await db.transaction(async (tx) => {
+        await requireClan(tx, actor, clanId, 'share');
+        return saveSettings(tx, clanId, actor.id, settings);
+      }),
+    );
   });
   app.post('/join', async (c) => {
     const actor = c.get('user');
     const clanId = c.req.param('clanId')!;
     requirePersonal(actor);
-    const settings = await parse(c, chatSettingsSchema);
+    const settings = await parseSettings(c);
     return c.json(
       await db.transaction(async (tx) => {
         const membership = await requireClan(tx, actor, clanId, 'share');
         if (membership.role === 'leader')
           await tx.insert(chats).values({ clanId, hostId: actor.id }).onConflictDoNothing();
         await requireChat(tx, clanId, true);
-        await tx
-          .insert(chatMembers)
-          .values({ clanId, userId: actor.id, settings })
-          .onConflictDoUpdate({
-            target: [chatMembers.clanId, chatMembers.userId],
-            set: { settings },
-          });
-        return settings;
+        return saveSettings(tx, clanId, actor.id, settings);
       }),
     );
   });

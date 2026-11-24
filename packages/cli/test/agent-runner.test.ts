@@ -79,7 +79,7 @@ function chatState(changes: Partial<ChatState> = {}): ChatState {
     messages: [],
     before: null,
     session: { host: 'lead@example.com', clan: 'Clan' },
-    settings: { approval: 'manual', tokenLimit: null, agentLimit: null },
+    settings: { approval: 'manual', tokenLimit: null, agentLimit: null, allowedModels: null },
     approvals: [],
     questions: [],
     runs: [],
@@ -218,7 +218,7 @@ test('approved runs start this member’s worker with its model, report usage, a
   const first = randomUUID();
   const second = randomUUID();
   const state = chatState({
-    settings: { approval: 'manual', tokenLimit: null, agentLimit: 1 },
+    settings: { approval: 'manual', tokenLimit: null, agentLimit: 1, allowedModels: null },
     runs: [run(randomUUID(), randomUUID()), run(first), run(second), { ...run(randomUUID()), status: 'running' }],
   });
   runner.update(state);

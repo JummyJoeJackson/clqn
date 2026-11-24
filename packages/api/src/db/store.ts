@@ -35,7 +35,11 @@ export interface WorkspaceStore {
     reissue: boolean,
   ): Promise<{ agent: Agent; token?: string }>;
   revokeToken(tokenHash: string): Promise<boolean>;
-  listAgents(actor: Actor, clanId: string, page?: PageQuery): Promise<(Agent & { active: boolean })[]>;
+  listAgents(
+    actor: Actor,
+    clanId: string,
+    page?: PageQuery,
+  ): Promise<(Agent & { active: boolean; allowedModels: string[] | null })[]>;
   agentStatus(actor: Actor): Promise<Agent | undefined>;
   authenticate(tokenHash: string): Promise<AuthenticatedActor | undefined>;
   createClan(userId: string, name: string): Promise<Clan>;
@@ -202,6 +206,10 @@ export function createStore(url: string, poolSize = 10) {
           agent: schema.agents,
           // Drizzle renders columns unqualified inside sql``, so name the tables explicitly.
           active: query<boolean>`exists (select 1 from credentials c where c.agent_id = agents.id)`,
+          // So the orchestrator can pick a model the owner allows.
+          allowedModels: query<
+            string[] | null
+          >`(select cm.settings -> 'allowedModels' from chat_members cm where cm.clan_id = agents.clan_id and cm.user_id = agents.owner_id)`,
         })
         .from(schema.agents)
         .where(
@@ -214,7 +222,11 @@ export function createStore(url: string, poolSize = 10) {
         )
         .orderBy(schema.agents.createdAt, schema.agents.id)
         .limit((page?.limit ?? 100) + 1);
-      return rows.map(({ agent, active }) => ({ ...agentView(agent), active }));
+      return rows.map(({ agent, active, allowedModels }) => ({
+        ...agentView(agent),
+        active,
+        allowedModels: allowedModels ?? null,
+      }));
     },
     async agentStatus(actor) {
       if (!actor.agentId || !actor.clanId) return undefined;
