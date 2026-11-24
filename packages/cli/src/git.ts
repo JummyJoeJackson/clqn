@@ -332,6 +332,16 @@ export async function inspectPullRequest(input: {
   };
 }
 
+// Commits a finished worker's changes as the member, so sandboxed agents never need to write Git's own files.
+// Does nothing outside the root of a Git checkout or when nothing changed.
+export async function commitWork(cwd: string, message: string) {
+  const path = await realpath(cwd);
+  const root = await git(path, ['rev-parse', '--show-toplevel']).catch(() => undefined);
+  if (!root || (await realpath(root)) !== path) return;
+  await git(path, ['add', '--all']);
+  if (await git(path, ['status', '--porcelain=v1'])) await git(path, ['commit', '--quiet', '-m', message]);
+}
+
 export async function publishWorktree(input: {
   worktreePath: string;
   repository: RepositoryWork;

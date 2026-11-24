@@ -13,6 +13,8 @@ export const allowedModelsSchema = z
   .max(100)
   .refine((models) => new Set(models).size === models.length, 'Model identifiers must be unique')
   .nullable();
+export const workerCommandsSchema = z.enum(['off', 'sandboxed', 'unrestricted']);
+export type WorkerCommands = z.infer<typeof workerCommandsSchema>;
 // A member's own limits for agents on their machine, enforced before each delegation. Null means no limit.
 export const chatSettingsSchema = z
   .object({
@@ -21,6 +23,8 @@ export const chatSettingsSchema = z
     agentLimit: limitSchema,
     // Older servers and clients omit it.
     allowedModels: allowedModelsSchema.default(null),
+    // What workers on this machine may run: nothing, commands inside the agent's sandbox, or anything.
+    commands: workerCommandsSchema.default('sandboxed'),
   })
   .strict();
 export type ChatSettings = z.infer<typeof chatSettingsSchema>;
@@ -30,6 +34,7 @@ export const defaultChatSettings: ChatSettings = {
   tokenLimit: null,
   agentLimit: null,
   allowedModels: null,
+  commands: 'sandboxed',
 };
 
 const chatText = z

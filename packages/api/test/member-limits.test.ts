@@ -21,6 +21,7 @@ test('chat settings hold every member limit and default to full access', () => {
     tokenLimit: null,
     agentLimit: null,
     allowedModels: null,
+    commands: 'sandboxed',
   });
   for (const settings of [
     { ...defaultChatSettings, tokenLimit: -1 },
@@ -28,6 +29,7 @@ test('chat settings hold every member limit and default to full access', () => {
     { ...defaultChatSettings, allowedModels: [] },
     { ...defaultChatSettings, allowedModels: ['two words'] },
     { ...defaultChatSettings, allowedModels: ['a', 'a'] },
+    { ...defaultChatSettings, commands: 'everything' },
     { ...defaultChatSettings, userId: randomUUID() },
   ])
     assert.equal(chatSettingsSchema.safeParse(settings).success, false, JSON.stringify(settings));
@@ -75,7 +77,7 @@ test('PostgreSQL: members set only their own limits before a session, and edits 
 
   // A new member sees full access until they choose otherwise.
   assert.deepEqual((await (await chat(member!.token)).json()).settings, defaultChatSettings);
-  const custom = { approval: 'manual', tokenLimit: 1000, agentLimit: 2, allowedModels: ['model-a'] };
+  const custom = { approval: 'manual', tokenLimit: 1000, agentLimit: 2, allowedModels: ['model-a'], commands: 'off' };
   // Saved before any session exists, and only by the member themselves.
   assert.equal((await chat(outsider!.token, '/settings', custom)).status, 404);
   assert.equal((await chat(worker.token, '/settings', custom)).status, 403);
@@ -97,8 +99,8 @@ test('PostgreSQL: members set only their own limits before a session, and edits 
 
   // Concurrent edits each replace the whole row, so the result is exactly one of them.
   const edits = [
-    { approval: 'automatic', tokenLimit: 5, agentLimit: null, allowedModels: null },
-    { approval: 'manual', tokenLimit: null, agentLimit: 9, allowedModels: ['model-b'] },
+    { approval: 'automatic', tokenLimit: 5, agentLimit: null, allowedModels: null, commands: 'sandboxed' },
+    { approval: 'manual', tokenLimit: null, agentLimit: 9, allowedModels: ['model-b'], commands: 'unrestricted' },
   ];
   const results = await Promise.all([
     chat(member!.token, '/settings', edits[0]),

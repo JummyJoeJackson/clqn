@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, mkdirSync } from 'node:fs';
 import { access, readFile, stat } from 'node:fs/promises';
-import { delimiter, resolve } from 'node:path';
-import { agentRegistrationSchema, agentSchema, ClqnClient } from '@clqn/shared';
+import { delimiter, join, resolve } from 'node:path';
+import { agentRegistrationSchema, agentSchema, ClqnClient, type WorkerCommands } from '@clqn/shared';
 import { configDirectory, writePrivateJson } from './config.js';
 
 export const runtimes = ['codex', 'claude'] as const;
@@ -73,14 +73,31 @@ export interface AgentCommand {
   env: NodeJS.ProcessEnv;
 }
 
+const workerSandbox = {
+  sandbox: {
+    enabled: true,
+    autoAllowBashIfSandboxed: true,
+    allowUnsandboxedCommands: false,
+    network: { allowedDomains: ['registry.npmjs.org'] },
+  },
+};
+
 // A non-interactive runtime run with the agent's clqn MCP server. The prompt goes to stdin, so chat text never
-// appears in argv. The orchestrator may only use clqn tools; workers may also edit files in their workspace.
+// appears in argv. The orchestrator may only use clqn tools; workers may also edit files in their workspace and run
+// commands as the member's setting allows. Codex cannot edit without running commands, so `off` makes it read-only.
 export function agentCommand(
   runtime: Runtime,
   profilePath: string,
-  options: { project: string; role: 'orchestrator' | 'worker'; model?: string | null | undefined },
+  options: {
+    project: string;
+    role: 'orchestrator' | 'worker';
+    model?: string | null | undefined;
+    commands?: WorkerCommands | undefined;
+  },
 ): AgentCommand {
+  const commands = options.role === 'worker' ? (options.commands ?? 'sandboxed') : 'off';
   const command = process.execPath;
+  const npmCache = join(configDirectory(), 'npm-cache');
   const args = [resolve(process.argv[1]!), 'mcp', '--profile', profilePath, '--path', options.project];
   const model = options.model ? (runtime === 'codex' ? ['-m', options.model] : ['--model', options.model]) : [];
   const runtimeArgs =
@@ -89,8 +106,11 @@ export function agentCommand(
           'exec',
           '--json',
           '--skip-git-repo-check',
-          '--sandbox',
-          options.role === 'worker' ? 'workspace-write' : 'read-only',
+          // Skip the member's own Codex config: it adds context to every turn. Sign-in still works.
+          '--ignore-user-config',
+          ...(commands === 'unrestricted'
+            ? ['--dangerously-bypass-approvals-and-sandbox']
+            : ['--sandbox', commands === 'sandboxed' ? 'workspace-write' : 'read-only']),
           ...model,
           '-c',
           `mcp_servers.clqn={command=${JSON.stringify(command)},args=${JSON.stringify(args)}}`,
@@ -106,12 +126,25 @@ export function agentCommand(
           '--strict-mcp-config',
           '--mcp-config',
           JSON.stringify({ mcpServers: { clqn: { type: 'stdio', command, args } } }),
+          // Skip the member's user settings and plugins: they add context to every turn. Workers keep the repo's
+          // skills, as if a member had started them there; the orchestrator only needs clqn tools.
+          '--setting-sources',
+          'project,local',
+          ...(options.role === 'orchestrator' ? ['--disable-slash-commands'] : []),
+          // Sandboxed workers run commands without prompts inside Claude Code's OS sandbox: writes stay in the
+          // worktree (git metadata included, hooks and config excluded) and the network is limited to the npm
+          // registry. npm's cache moves out of ~/.npm, which the sandbox blocks, into a directory it may write.
+          ...(commands === 'sandboxed' ? ['--settings', JSON.stringify(workerSandbox), '--add-dir', npmCache] : []),
           '--permission-mode',
-          options.role === 'worker' ? 'acceptEdits' : 'default',
+          commands === 'unrestricted' ? 'bypassPermissions' : options.role === 'worker' ? 'acceptEdits' : 'default',
           '--allowedTools',
           'mcp__clqn',
         ];
   const env: NodeJS.ProcessEnv = { ...process.env, CLQN_AGENT_PROFILE: profilePath };
+  if (runtime === 'claude' && commands === 'sandboxed') {
+    mkdirSync(npmCache, { recursive: true, mode: 0o700 });
+    env.npm_config_cache = npmCache;
+  }
   delete env.CLQN_TOKEN;
   delete env.CLQN_CLAN_ID;
   return { command: runtime, args: runtimeArgs, env };

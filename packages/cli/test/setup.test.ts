@@ -132,7 +132,9 @@ test('choosing a clan opens an existing one, creates one, or reports no invitati
   assert.match(create.printed.join('\n'), /No pending invitations\. Ask a clan leader to invite me@example\.com\./);
   assert.match(create.questions.at(-2)!, /^Clan name \(/);
   assert.match(create.printed.join('\n'), /1\. Full access \(no limits\)\n {2}2\. Custom/);
-  assert.deepEqual(saved, [{ approval: 'manual', tokenLimit: null, agentLimit: null, allowedModels: null }]);
+  assert.deepEqual(saved, [
+    { approval: 'manual', tokenLimit: null, agentLimit: null, allowedModels: null, commands: 'sandboxed' },
+  ]);
 });
 
 test('a saved clan the user no longer belongs to is forgotten so setup asks again', async (t) => {
@@ -188,7 +190,9 @@ test('joining a clan accepts the chosen invitation and refreshes a stale GitHub 
   const custom = ['2', '1.5', '5000', '', ' a, b ,c '];
   const prompts = scripted(['2', '2', '2', '2', ...custom]);
   assert.deepEqual(await chooseClan({ server: f.url, connect, canSignIn: true, ...prompts }), clan);
-  assert.deepEqual(saved, [{ approval: 'manual', tokenLimit: 5000, agentLimit: null, allowedModels: ['a', 'b', 'c'] }]);
+  assert.deepEqual(saved, [
+    { approval: 'manual', tokenLimit: 5000, agentLimit: null, allowedModels: ['a', 'b', 'c'], commands: 'sandboxed' },
+  ]);
   assert.deepEqual(prompts.questions.slice(-5), [
     'Enter a number (1): ',
     'Token limit (blank for none): ',

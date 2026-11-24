@@ -68,7 +68,13 @@ test('area charts scale to the width and keep the peak', () => {
 test('chat screen offers Ctrl+G metrics, drops the token graph, and settings fit 12 rows', () => {
   const state = {
     session: { clan: 'Docs', host: 'ana@example.com' },
-    settings: { approval: 'manual', tokenLimit: 5000, agentLimit: 2, allowedModels: ['model-a', 'model-b'] },
+    settings: {
+      approval: 'manual',
+      tokenLimit: 5000,
+      agentLimit: 2,
+      allowedModels: ['model-a', 'model-b'],
+      commands: 'sandboxed',
+    },
     messages: [],
     before: null,
     approvals: [],
@@ -105,7 +111,7 @@ test('chat screen offers Ctrl+G metrics, drops the token graph, and settings fit
       tokenText: '5000',
       agentText: '2',
       modelText: 'model-a, model-b',
-      field: 5,
+      field: 6,
       action: 'Save settings',
     },
   }).lines;

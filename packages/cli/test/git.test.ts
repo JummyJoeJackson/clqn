@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import type { ClqnClient } from '@clqn/shared';
 import { sourceNodeArgs } from '../../../scripts/test-node.js';
 import {
+  commitWork,
   inspectPullRequest,
   localRepository,
   type MainSyncResult,
@@ -143,6 +144,25 @@ test('preparing a task worktree preserves a dirty personal checkout and starts a
   const commands = await f.commands();
   assert.ok(commands.some(({ args }) => args.includes('fetch')));
   assert.ok(!commands.some(({ args }) => args.some((x) => ['pull', 'reset', 'stash', '--force'].includes(x))));
+});
+
+test("clqn commits a worker's changes, with hooks off, only at the root of a checkout", async (t) => {
+  const f = await fixture(t);
+  await prepareWorktree(f);
+  // A hook that would block the commit: clqn never runs hooks, which a worker may have written.
+  await mkdir(join(f.root, 'hooks'));
+  await writeFile(join(f.root, 'hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  await git(f.worktreePath, ['config', 'core.hooksPath', join(f.root, 'hooks')]);
+  await commitWork(f.worktreePath, 'Nothing changed');
+  assert.equal(await git(f.worktreePath, ['rev-parse', 'HEAD']), f.baseSha);
+  await mkdir(join(f.worktreePath, 'src'));
+  await writeFile(join(f.worktreePath, 'src', 'new.txt'), 'work\n');
+  await commitWork(join(f.worktreePath, 'src'), 'Not the root');
+  assert.equal(await git(f.worktreePath, ['rev-parse', 'HEAD']), f.baseSha);
+
+  await commitWork(f.worktreePath, 'Add new file');
+  assert.equal(await git(f.worktreePath, ['log', '-1', '--format=%s']), 'Add new file');
+  assert.equal(await git(f.worktreePath, ['status', '--porcelain=v1']), '');
 });
 
 test('preparing refuses the wrong origin, unsafe refs, existing paths and an unrelated base', async (t) => {

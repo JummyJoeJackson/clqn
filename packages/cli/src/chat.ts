@@ -36,7 +36,7 @@ const setupFor = (settings: ChatSettings): Setup => ({
   tokenText: settings.tokenLimit?.toString() ?? '',
   agentText: settings.agentLimit?.toString() ?? '',
   modelText: settings.allowedModels?.join(', ') ?? '',
-  field: 4,
+  field: 5,
 });
 
 // Background agents that follow the polled chat state and report a short status line.
@@ -298,13 +298,17 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
       else setup = undefined;
     } else if (key.name === 'tab' || key.name === 'up' || key.name === 'down') {
       const change = key.name === 'up' || key.shift ? -1 : 1;
-      setup.field = (setup.field + 6 + change) % 6;
+      setup.field = (setup.field + 7 + change) % 7;
       replaceField = true;
     } else if (setup.field === 0 && ['left', 'right', 'space', 'return'].includes(key.name ?? '')) {
       setup.value = { ...setup.value, approval: setup.value.approval === 'manual' ? 'automatic' : 'manual' };
+    } else if (setup.field === 4 && ['left', 'right', 'space', 'return'].includes(key.name ?? '')) {
+      const levels = ['off', 'sandboxed', 'unrestricted'] as const;
+      const next = levels.indexOf(setup.value.commands) + (key.name === 'left' ? 2 : 1);
+      setup.value = { ...setup.value, commands: levels[next % 3]! };
     } else if (key.name === 'return') {
-      if (setup.field === 4) void save();
-      else if (setup.field === 5) {
+      if (setup.field === 5) void save();
+      else if (setup.field === 6) {
         result = 'sign-out';
         stop();
       } else {

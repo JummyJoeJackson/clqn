@@ -9,7 +9,7 @@ import { PassThrough } from 'node:stream';
 import test, { type TestContext } from 'node:test';
 import type { ChatRun, ChatState, ClqnClient } from '@clqn/shared';
 import { startAgentRunner } from '../src/agent-runner.js';
-import { agentOutput, agentProfilePath, runtimeSetting, saveAgentProfile } from '../src/agent-session.js';
+import { agentCommand, agentOutput, agentProfilePath, runtimeSetting, saveAgentProfile } from '../src/agent-session.js';
 
 const server = 'http://127.0.0.1:9';
 const clanId = randomUUID();
@@ -79,7 +79,7 @@ function chatState(changes: Partial<ChatState> = {}): ChatState {
     messages: [],
     before: null,
     session: { host: 'lead@example.com', clan: 'Clan' },
-    settings: { approval: 'manual', tokenLimit: null, agentLimit: null, allowedModels: null },
+    settings: { approval: 'manual', tokenLimit: null, agentLimit: null, allowedModels: null, commands: 'sandboxed' },
     approvals: [],
     questions: [],
     runs: [],
@@ -218,7 +218,7 @@ test('approved runs start this member’s worker with its model, report usage, a
   const first = randomUUID();
   const second = randomUUID();
   const state = chatState({
-    settings: { approval: 'manual', tokenLimit: null, agentLimit: 1, allowedModels: null },
+    settings: { approval: 'manual', tokenLimit: null, agentLimit: 1, allowedModels: null, commands: 'off' },
     runs: [run(randomUUID(), randomUUID()), run(first), run(second), { ...run(randomUUID()), status: 'running' }],
   });
   runner.update(state);
@@ -226,12 +226,13 @@ test('approved runs start this member’s worker with its model, report usage, a
   const worker = f.spawned[0]!;
   assert.equal(worker.command, 'codex');
   assert.equal(worker.cwd, f.directory);
-  assert.deepEqual(worker.args.slice(0, 7), [
+  assert.deepEqual(worker.args.slice(0, 8), [
     'exec',
     '--json',
     '--skip-git-repo-check',
+    '--ignore-user-config',
     '--sandbox',
-    'workspace-write',
+    'read-only',
     '-m',
     'gpt-test',
   ]);
@@ -341,4 +342,39 @@ test('CLQN_RUNTIME chooses the agent CLI', async () => {
     if (previous === undefined) delete process.env.CLQN_RUNTIME;
     else process.env.CLQN_RUNTIME = previous;
   }
+});
+
+test('workers run commands as the member allows: off, sandboxed by default, or unrestricted', async (t) => {
+  await fixture(t);
+  const worker = agentCommand('claude', '/profile.json', { project: '/work/task', role: 'worker' });
+  const settings = JSON.parse(worker.args[worker.args.indexOf('--settings') + 1]!);
+  assert.equal(settings.sandbox.enabled, true);
+  assert.equal(settings.sandbox.allowUnsandboxedCommands, false);
+  assert.deepEqual(settings.sandbox.network.allowedDomains, ['registry.npmjs.org']);
+  assert.equal(worker.args[worker.args.indexOf('--add-dir') + 1], worker.env.npm_config_cache);
+  assert.equal(worker.args[worker.args.indexOf('--setting-sources') + 1], 'project,local');
+  assert.ok(!worker.args.includes('--disable-slash-commands'), "workers keep the repo's skills");
+
+  const orchestrator = agentCommand('claude', '/profile.json', { project: '/work', role: 'orchestrator' });
+  assert.ok(!orchestrator.args.includes('--settings'), 'the orchestrator runs no commands');
+  assert.ok(orchestrator.args.includes('--disable-slash-commands'));
+
+  const claude = (commands: 'off' | 'unrestricted') =>
+    agentCommand('claude', '/profile.json', { project: '/work/task', role: 'worker', commands });
+  const off = claude('off');
+  assert.ok(!off.args.includes('--settings'));
+  assert.equal(off.args[off.args.indexOf('--permission-mode') + 1], 'acceptEdits');
+  assert.equal(off.env.npm_config_cache, process.env.npm_config_cache);
+  const anything = claude('unrestricted');
+  assert.ok(!anything.args.includes('--settings'));
+  assert.equal(anything.args[anything.args.indexOf('--permission-mode') + 1], 'bypassPermissions');
+
+  const codex = (role: 'orchestrator' | 'worker', commands?: 'off' | 'unrestricted') =>
+    agentCommand('codex', '/profile.json', { project: '/work/task', role, commands }).args;
+  assert.ok(codex('worker').includes('--ignore-user-config'));
+  assert.equal(codex('worker')[codex('worker').indexOf('--sandbox') + 1], 'workspace-write');
+  assert.equal(codex('worker', 'off')[codex('worker', 'off').indexOf('--sandbox') + 1], 'read-only');
+  assert.equal(codex('orchestrator')[codex('orchestrator').indexOf('--sandbox') + 1], 'read-only');
+  assert.ok(codex('worker', 'unrestricted').includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(!codex('worker', 'unrestricted').includes('--sandbox'));
 });

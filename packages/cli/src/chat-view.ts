@@ -153,6 +153,7 @@ function settingsLines(settings: SettingsView, columns: number, paint: Paint, co
     `Token limit      ${settings.tokenText || '∞'}`,
     `Agent limit      ${settings.agentText || '∞'}`,
     `Models           ${plain(settings.modelText) || 'Any'}`,
+    `Worker commands  ${{ off: 'Off', sandboxed: 'Sandboxed', unrestricted: 'Unrestricted' }[settings.value.commands]}`,
     settings.action,
     'Sign out',
   ];
@@ -163,8 +164,8 @@ function settingsLines(settings: SettingsView, columns: number, paint: Paint, co
       const line = clip(`${index === settings.field ? '›' : ' '} ${label}`, columns);
       return index === settings.field ? paint(line, 'accent') : line;
     }),
-    '',
-    paint(clip('↑↓ Move  ←→ Approval  Enter Select  Esc Back', columns), 'muted'),
+    ...(compact ? [] : ['']),
+    paint(clip('↑↓ Move  ←→ Change  Enter Select  Esc Back', columns), 'muted'),
     paint(clip('Enter a whole number or none for unlimited; models comma-separated, blank for any.', columns), 'muted'),
   ];
 }
