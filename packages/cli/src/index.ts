@@ -60,7 +60,7 @@ let serverUrl = hostedServer;
 let sessionProfile: AgentProfile | undefined;
 const program = new Command()
   .name('clqn')
-  .description('Open the shared clan chat in your terminal')
+  .description('Your agents. My agents. One workspace.\nRun clqn with no command to open the clan chat.')
   .version(VERSION)
   .option('--api-url <url>', 'override the saved clqn server for this command')
   .option('--json', 'output machine-readable JSON')
