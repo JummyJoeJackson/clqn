@@ -1,6 +1,6 @@
 # Agent policies
 
-Each member can save preferences for all their agents in a clan. **These settings are not enforced yet:** there is no model runner, usage meter, or execution approval flow. Responses report `enforcement: "unavailable"`.
+Each member can save limits for all their agents in a clan. **Allowed models are enforced** before each chat delegation: the orchestrator must pick one of your models (it defaults to the first), and approvals are rechecked against your current list. The token limit and control level are saved preferences that seed your chat settings. Responses report `enforcement: "models"`.
 
 ## Commands
 
@@ -12,10 +12,10 @@ clqn limits --tokens none --models any
 
 Updates preserve unspecified fields. Use `--clan <id>` to select a clan and `--json` for scripting.
 
-| Setting | Intended behavior for a future runner | Default |
+| Setting | Behavior | Default |
 | --- | --- | --- |
 | `--tokens <n>` | Total input/output tokens across your agents in this clan; no time window or reset. `0` requests no usage; `none` removes the cap. | `none` |
-| `--models <ids...>` | Exact, case-sensitive model IDs; availability is not checked. `any` removes the restriction. | `any` |
+| `--models <ids...>` | Exact, case-sensitive model IDs that chat delegations to your agents may use; availability is not checked. `any` removes the restriction. | `any` |
 | `--control manual` | You start work. | `manual` |
 | `--control approve` | The leader requests work; you approve each request. | — |
 | `--control automatic` | The leader requests work within limits and local permissions, without per-request approval. | — |
@@ -34,4 +34,4 @@ The CLI reads the current revision before updating. A concurrent change returns 
 - `POST /v1/clans/:clanId/policy`: send `expectedRevision` and at least one of `tokenLimit`, `allowedModels`, or `control`. JSON `null` removes a cap or model restriction.
 - MCP `clqn_get_policy`: read only; no update tool.
 
-Hard enforcement requires a runner or gateway that meters calls, reserves capacity across concurrent agents, and checks models and approvals. Calls outside it remain outside clqn's control.
+clqn checks the model named on each delegation; it cannot stop an agent from calling a different model outside clqn.
