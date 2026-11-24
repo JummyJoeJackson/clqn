@@ -24,6 +24,7 @@ import {
   revokedAgentSchema,
 } from './agents.js';
 import { setAliasSchema } from './aliases.js';
+import { chatMessageSchema, chatMessagesSchema, sendChatSchema } from './chat.js';
 import {
   contextEntrySchema,
   contextHistorySchema,
@@ -47,6 +48,7 @@ import {
 export * from './activity.js';
 export * from './agents.js';
 export * from './aliases.js';
+export * from './chat.js';
 export * from './context.js';
 export * from './pagination.js';
 export * from './tasks.js';
@@ -203,6 +205,20 @@ export class ClqnClient {
       if (after) seen.add(after);
     } while (after);
     return pages;
+  }
+  chatMessages(clanId: string, options: { after?: number; limit?: number } = {}) {
+    const query = new URLSearchParams();
+    if (options.after !== undefined) query.set('after', String(options.after));
+    if (options.limit !== undefined) query.set('limit', String(options.limit));
+    const suffix = query.size ? `?${query}` : '';
+    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/chat${suffix}`, chatMessagesSchema);
+  }
+  sendChat(clanId: string, text: string) {
+    return this.request(
+      `/v1/clans/${encodeURIComponent(clanId)}/chat`,
+      chatMessageSchema,
+      sendChatSchema.parse({ text }),
+    );
   }
   private requireSecureLogin() {
     if (this.baseUrl.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(this.baseUrl.hostname)) {
