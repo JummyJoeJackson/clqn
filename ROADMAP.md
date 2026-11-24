@@ -22,29 +22,23 @@ Each member sets their own:
 
 ## What's done
 
-- Sign in with GitHub, create a clan, and invite teammates by email
-- Connect Claude Code or Codex to a clan
-- Tasks with clear ownership: assign, claim, open a pull request, merge
-- A shared clan chat that's saved on the server
-- An orchestrator role (one per clan, belongs to the leader)
-- Model limits are saved (but not enforced yet)
-- The chat screen: `clqn` opens a full-screen chat with an agents sidebar and settings (F2)
+- `clqn` is the only command: it signs you in with GitHub, offers "Create a clan" or "Join a clan" (with your pending invites), and opens the chat. "Sign out" is in settings (F2)
+- Invite teammates by email
+- The chat screen: a full-screen chat, saved on the server, with an agents sidebar and settings (F2)
 - Message queue in PostgreSQL: messages stay queued until the orchestrator handles them
-- The orchestrator handles the queue through MCP tools (inbox, decide, report) when the leader runs it with `clqn agent run`
+- One orchestrator per clan (the leader's). It starts in the background when the leader opens `clqn` and works the queue. Through MCP it replies, asks clarifying questions (answer with F4), and proposes work
 - Yes/no approvals in the chat (F3, then `y`/`n`), or automatic approval
-- Token and agent-count limits enforced before each delegation
-- Live sidebar: each delegation's task, worker, status, tokens, and a 24h clan token graph
+- Approved agents start in the background on the member's machine, with the approved model
+- Limits: new members pick Full access (no limits) or Custom when they join; edit token, agent-count, and model limits in F2. All are enforced before each delegation
+- Live sidebar: each delegation's task, worker, status, and tokens
+- Metrics tab (F5): tokens and active agents over time, tokens by member and by task, and queue wait, over 24h or 7d
 - GitHub webhooks tell connected agents when `main` changes, and clean checkouts sync
 - The API runs on Google Cloud (Cloud Run + PostgreSQL)
 
 ## What's next
 
-1. **One command.** `clqn` signs you in with GitHub if needed, then offers "Create a clan" or "Join a clan" (with your pending invites), then opens the chat. Remove `clqn init` and `clqn join`. Remove `clqn login` and `clqn logout`, and add "Sign out" to settings (F2).
-2. **Orchestrator loop.** When the leader opens `clqn`, the orchestrator starts in the background and works the queue. No `clqn agent run`.
-3. **Run approved agents.** After a `y`, the member's machine starts the agent in the background. `clqn agent run` becomes a debugging fallback.
-4. **Model limits.** Enforce each member's allowed models.
-5. **`main` sync in the chat screen.** Link the repo during setup, and keep `main` synced while `clqn` is open.
-6. **Update documentation (README - concise, user focused), website**
+1. **`main` sync in the chat screen.** Link the repo during setup, and keep `main` synced while `clqn` is open.
+2. **Update documentation (README - concise, user focused), website**
 
 ## Later
 
