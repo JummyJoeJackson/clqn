@@ -11,7 +11,7 @@ function cells(char: string) {
     ? 2
     : 1;
 }
-const width = (text: string) => characters(text).reduce((total, char) => total + cells(char), 0);
+export const width = (text: string) => characters(text).reduce((total, char) => total + cells(char), 0);
 function take(text: string, limit: number) {
   let used = 0;
   let result = '';
@@ -22,8 +22,8 @@ function take(text: string, limit: number) {
   }
   return result;
 }
-const clip = (text: string, limit: number) => (width(text) <= limit ? text : `${take(text, limit - 1)}…`);
-const pad = (text: string, limit: number) => text + ' '.repeat(Math.max(0, limit - width(text)));
+export const clip = (text: string, limit: number) => (width(text) <= limit ? text : `${take(text, limit - 1)}…`);
+export const pad = (text: string, limit: number) => text + ' '.repeat(Math.max(0, limit - width(text)));
 
 function wrap(text: string, limit: number) {
   const lines: string[] = [];
@@ -52,7 +52,7 @@ function wrap(text: string, limit: number) {
   return lines;
 }
 
-const marginFor = (columns: number) => (columns >= 60 ? 2 : 0);
+export const marginFor = (columns: number) => (columns >= 60 ? 2 : 0);
 const sidebarFor = (content: number) => (content >= 72 ? Math.min(34, Math.floor(content * 0.29)) : 0);
 export function transcriptColumns(columns: number) {
   const content = columns - 2 * marginFor(columns);
@@ -60,18 +60,18 @@ export function transcriptColumns(columns: number) {
   return sidebar ? content - sidebar - 3 : content;
 }
 
-const name = (value: string) => plain(value.includes('@') ? value.split('@')[0]! : value);
-const number = (value: number) =>
+export const name = (value: string) => plain(value.includes('@') ? value.split('@')[0]! : value);
+export const number = (value: number) =>
   value < 1000
     ? String(value)
     : Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value).toLowerCase();
-const limit = (value: number | null) => (value === null ? '∞' : number(value));
+export const limit = (value: number | null) => (value === null ? '∞' : number(value));
 const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
 type Tone = 'accent' | 'muted' | 'active' | 'warning' | 'bold' | 'error';
 const codes: Record<Tone, number> = { accent: 96, muted: 90, active: 92, warning: 93, bold: 1, error: 91 };
-type Paint = (text: string, tone: Tone) => string;
-const painter =
+export type Paint = (text: string, tone: Tone) => string;
+export const painter =
   (color: boolean): Paint =>
   (text, tone) =>
     color ? `\x1b[${codes[tone]}m${text}\x1b[0m` : text;
@@ -82,14 +82,14 @@ const statuses = {
   approval: ['◆', 'Awaiting approval', 'warning'],
   declined: ['×', 'Declined', 'muted'],
 } as const;
-const runStatuses = {
+export const runStatuses = {
   queued: ['◌', 'Queued', 'muted'],
   running: ['◉', 'Running', 'accent'],
   done: ['✓', 'Done', 'active'],
   released: ['×', 'Released', 'muted'],
 } as const;
 
-interface Frame {
+export interface Frame {
   lines: string[];
   cursor?: { row: number; column: number };
 }
@@ -166,23 +166,6 @@ function settingsLines(settings: SettingsView, columns: number, paint: Paint) {
   ];
 }
 
-function tokenTrend(hours: number[], columns: number, paint: Paint) {
-  let total = 0;
-  const cumulative = hours.map((tokens) => {
-    total = Math.min(Number.MAX_SAFE_INTEGER, total + tokens);
-    return total;
-  });
-  const caption = `Clan tokens · 24h  ${number(total)}`;
-  const slots = Math.min(hours.length, columns - width(caption) - 2);
-  if (slots < 1) return paint(clip(caption, columns), 'muted');
-  const levels = '▁▂▃▄▅▆▇█';
-  const trend = Array.from({ length: slots }, (_, slot) => {
-    const end = Math.ceil(((slot + 1) * hours.length) / slots) - 1;
-    return levels[total ? Math.round(((levels.length - 1) * cumulative[end]!) / total) : 0];
-  }).join('');
-  return `${paint(caption, 'muted')}  ${paint(trend, 'accent')}`;
-}
-
 export function chatFrame(view: View): Frame {
   const columns = Math.max(1, view.columns);
   const rows = Math.max(1, view.rows);
@@ -205,7 +188,7 @@ export function chatFrame(view: View): Frame {
   });
   const notice = view.notice ? paint(clip(plain(view.notice), content), 'warning') : '';
   if (view.settings) {
-    lines.push('', ...settingsLines(view.settings, content, paint));
+    lines.push(...(rows > 12 ? [''] : []), ...settingsLines(view.settings, content, paint));
     if (notice) lines.splice(rows - 1, 0, notice);
     return finish();
   }
@@ -263,8 +246,7 @@ export function chatFrame(view: View): Frame {
   ].filter(Boolean);
   const older = view.scroll > 0 && rows >= 15;
   const transcriptRows = rows - 8 - attention.length - Number(older) - Number(!right);
-  const trend = transcriptRows > 1 ? state?.reportedTokensByHour : undefined;
-  const height = Math.max(1, transcriptRows - Number(trend !== undefined));
+  const height = Math.max(1, transcriptRows);
   const end = Math.max(0, transcript.length - view.scroll);
   const visible = transcript.slice(Math.max(0, end - height), end);
   for (let i = 0; i < height; i++) {
@@ -307,11 +289,11 @@ export function chatFrame(view: View): Frame {
       (content >= 52 ? `${bar}  ` : '') + paint(clip(summary, content >= 52 ? content - 9 : content), 'muted'),
     );
   } else lines.push('');
-  if (trend) lines.push(tokenTrend(trend, content, paint));
   const actions = [
     'F2 Settings',
     pending ? (view.approvalFocused ? '↑↓ Choose  Y Approve  N Decline  Esc Back' : 'F3 Approvals') : '',
     question ? 'F4 Reply' : '',
+    'F5 Metrics',
     view.messages.length > 3 || view.hasOlder ? 'PgUp History' : '',
     'Ctrl+C Quit',
   ].filter(Boolean);

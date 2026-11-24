@@ -3,12 +3,15 @@ import { emitKeypressEvents, type Key } from 'node:readline';
 import {
   ApiError,
   type ChatMessage,
+  type ChatMetrics,
+  type ChatMetricsWindow,
   type ChatSettings,
   type ChatState,
   type ClqnClient,
   type SendChat,
 } from '@clqn/shared';
 import { characters, chatFrame, messageLines, plain, transcriptColumns } from './chat-view.js';
+import { metricsFrame } from './metrics-view.js';
 
 const help = (error: unknown) => (error instanceof Error ? error.message : 'Request failed');
 const numeric = (text: string) => {
@@ -55,6 +58,7 @@ export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' |
   let failed = false;
   let closed = false;
   let paste: string | undefined;
+  let metrics: { window: ChatMetricsWindow; data?: ChatMetrics; at: number } | undefined;
   const outbox: SendChat[] = [];
   const controller = new AbortController();
 
@@ -73,7 +77,7 @@ export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' |
   function draw() {
     if (closed) return;
     const session = state?.session ?? info.session;
-    const frame = chatFrame({
+    let frame = chatFrame({
       columns: columns(),
       rows: rows(),
       color: !('NO_COLOR' in process.env),
@@ -106,6 +110,16 @@ export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' |
       notice:
         notice ?? connection ?? (failed ? 'Message unsent · Ctrl+R Retry' : outbox.length ? 'Sending…' : undefined),
     });
+    if (metrics)
+      frame = metricsFrame({
+        columns: columns(),
+        rows: rows(),
+        color: !('NO_COLOR' in process.env),
+        clan: session?.clan ?? info.clan,
+        window: metrics.window,
+        metrics: metrics.data,
+        notice,
+      });
     // Draw in one write to keep polling from moving the input cursor or scrolling the shell.
     const screen = frame.lines.map((line, index) => `\x1b[${index + 1};1H\x1b[2K${line}`).join('');
     const cursor = frame.cursor ? `\x1b[${frame.cursor.row + 1};${frame.cursor.column + 1}H\x1b[?25h` : '';
@@ -135,7 +149,22 @@ export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' |
     state = next;
   }
 
+  async function loadMetrics() {
+    const view = metrics;
+    if (!view) return;
+    view.at = Date.now();
+    try {
+      const data = await api.chatMetrics(clanId, view.window, controller.signal);
+      if (metrics?.window === data.window) metrics.data = data;
+    } catch (error) {
+      if (!closed) notice = help(error);
+    } finally {
+      draw();
+    }
+  }
+
   async function refresh() {
+    if (metrics && Date.now() - metrics.at > 30_000) void loadMetrics();
     if (closed || refreshing || !state) return;
     refreshing = true;
     try {
@@ -274,6 +303,10 @@ export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' |
     if (key.name === 'f2' && state) {
       setup = setupFor(state.settings);
       approvalFocused = false;
+    } else if (key.name === 'f5') {
+      metrics = { window: '24h', at: 0 };
+      approvalFocused = false;
+      void loadMetrics();
     } else if (['f3', 'tab'].includes(key.name ?? '') && state?.approvals.length) {
       approvalFocused = !approvalFocused;
     } else if (key.name === 'f4' && state?.questions.length) {
@@ -334,7 +367,7 @@ export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' |
     }
     if (paste !== undefined) {
       if (key.name === 'paste-end') {
-        if (state && !setup && !approvalFocused) edit(paste);
+        if (state && !setup && !metrics && !approvalFocused) edit(paste);
         paste = undefined;
         draw();
       } else if (paste.length < 4000) {
@@ -347,7 +380,13 @@ export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' |
       return;
     }
     notice = undefined;
-    if (setup) setupKey(text ?? '', key);
+    if (metrics) {
+      if (key.name === 'escape' || key.name === 'f5') metrics = undefined;
+      else if (key.name === 't' || key.name === 'tab') {
+        metrics = { window: metrics.window === '24h' ? '7d' : '24h', at: 0 };
+        void loadMetrics();
+      }
+    } else if (setup) setupKey(text ?? '', key);
     else if (state) composerKey(text ?? '', key);
     draw();
   }
