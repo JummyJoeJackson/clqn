@@ -8,6 +8,26 @@ export interface Config {
   clanId?: string;
 }
 
+export const hostedServer = 'https://clqn-api-660379279615.us-central1.run.app';
+export const legacyLocalServer = 'http://127.0.0.1:3000';
+
+export function serverOrigin(address: string): string {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    throw new Error('Enter a full server address, such as https://clqn.example.com');
+  }
+  if (
+    url.protocol !== 'https:' &&
+    !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+  ) {
+    throw new Error('Use HTTPS for a team server. HTTP is supported for a server on this machine.');
+  }
+  if (url.username || url.password) throw new Error('The server address cannot contain a username or password');
+  return url.origin;
+}
+
 const directory = () => process.env.CLQN_CONFIG_DIR ?? join(homedir(), '.config', 'clqn');
 const filename = (apiUrl: string) =>
   join(directory(), `${createHash('sha256').update(new URL(apiUrl).origin).digest('hex')}.json`);
@@ -38,19 +58,45 @@ export async function readConfig(apiUrl: string): Promise<Config> {
   }
 }
 
-export async function writeConfig(apiUrl: string, config: Config): Promise<void> {
+async function writePrivateFile(path: string, contents: string): Promise<void> {
   await mkdir(directory(), { recursive: true, mode: 0o700 });
   await chmod(directory(), 0o700);
-  const path = filename(apiUrl);
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, `${JSON.stringify(config)}\n`, { mode: 0o600, flag: 'wx' });
+    await writeFile(temporary, contents, { mode: 0o600, flag: 'wx' });
     await rename(temporary, path);
   } finally {
     await rm(temporary, { force: true });
   }
 }
 
+export function writeConfig(apiUrl: string, config: Config): Promise<void> {
+  return writePrivateFile(filename(apiUrl), `${JSON.stringify(config)}\n`);
+}
+
 export async function removeConfig(apiUrl: string): Promise<void> {
   await rm(filename(apiUrl), { force: true });
+}
+
+const serverFile = () => join(directory(), 'server');
+
+export async function readServer(): Promise<string | undefined> {
+  try {
+    return serverOrigin(await readFile(serverFile(), 'utf8'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new Error('Could not read the saved server. Run clqn login --server <url> to select it again.');
+  }
+}
+
+export function writeServer(apiUrl: string): Promise<void> {
+  return writePrivateFile(serverFile(), `${serverOrigin(apiUrl)}\n`);
+}
+
+export async function preferredServer(): Promise<string> {
+  const remembered = await readServer();
+  if (remembered) return remembered;
+  // Before server selection was saved, the implicit server was the local development instance.
+  const local = await readConfig(legacyLocalServer);
+  return local.token ? legacyLocalServer : hostedServer;
 }

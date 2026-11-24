@@ -33,7 +33,6 @@ Install with npm (Node.js 22.12+):
 
 ```sh
 npm install -g clqn-cli
-clqn --help
 ```
 
 Alternatively, install with Homebrew:
@@ -45,33 +44,34 @@ brew install clqn
 
 ### Try it locally
 
-With Docker, run a private API from a clone of this repository and sign in to it:
+Clone this repository and open a terminal in the clone. Docker Compose starts the clqn server and its database on your machine. The second command creates and signs in to a local account in one step.
 
 ```sh
-git clone https://github.com/rli8145/clqn && cd clqn
 docker compose --profile server up --build -d --wait
-docker compose exec api node packages/api/dist/manage-user.js create you@example.com   # prints a one-time token
-export CLQN_API_URL=http://127.0.0.1:8080
-printf '%s' '<token>' | clqn login
+docker compose exec -T api node packages/api/dist/manage-user.js create you@example.com \
+  | clqn login --server http://127.0.0.1:8080
 clqn init "My project"
 ```
 
-See [hosting](docs/hosting.md) to share it with teammates over HTTPS.
+To set up a shared server and enable GitHub sign-in for your team, follow the [hosting guide](docs/hosting.md).
 
 ## Usage
 
 ### 1. Sign in and create a clan
 
-Use the API URL from your clan operator, or [self-host one with Docker Compose](docs/hosting.md#self-host-with-docker-compose) in one command.
+Use hosted clqn to get started. It keeps your clan's members, tasks, and shared context available to your team.
 
 ```sh
-export CLQN_API_URL="<operator-api-url>"
-clqn login --github
+clqn login
 clqn init "My project"
 clqn invite teammate@example.com
 ```
 
+Open GitHub from the terminal, enter the short code GitHub requests, and approve sign-in.
+
 Invited? Sign in and run `clqn join <invite-code>`.
+
+For a self-hosted clan, sign in with `clqn login --server <https-address>` once. Your team uses that same address and clqn remembers it for future commands. [Hosting guide](docs/hosting.md)
 
 ### 2. Connect your agents
 

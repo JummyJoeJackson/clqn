@@ -5,9 +5,7 @@ Humans sign in with GitHub or a personal token from their operator. Agents use s
 ## Log in and create a clan
 
 ```sh
-clqn login --github
-# Or use an operator-issued token:
-clqn login < /secure/path/to/token-file
+clqn login
 clqn whoami
 clqn init "My project"
 clqn clans
@@ -15,15 +13,15 @@ clqn members
 clqn logout
 ```
 
-Set `CLQN_API_URL` or `--api-url` to your operator's URL. Authenticated requests require HTTPS except on loopback; redirects are refused.
+The CLI uses hosted clqn by default. To use a self-hosted instance, sign in with `clqn login --server <https-address>`. If the operator supplies a personal credential, redirect its file to `clqn login --server <https-address>`. clqn remembers the server after a successful sign-in. Use `--api-url` or `CLQN_API_URL` for one-off overrides. Authenticated requests require HTTPS except on loopback. The client refuses redirects.
 
 Credentials and clan selection are stored per API origin in `~/.config/clqn` (`CLQN_CONFIG_DIR` overrides it), with private directory/file permissions. Logging in again keeps your clan selection, and an agent token selects its own clan; `init` and `join` select a clan. Use `--clan <id>` to override it.
 
-`CLQN_TOKEN` overrides the saved token. Logout revokes the saved token on the server, then removes local credentials and selection. It does not revoke or unset `CLQN_TOKEN`. If the API is unreachable, local credentials are still removed and the output reports that revocation failed.
+`CLQN_TOKEN` overrides the saved credential. Set the server explicitly when using an environment or piped credential for a remote server. Without an explicit server, these credentials use the original local development address at `http://127.0.0.1:3000`. An existing sign-in at that address is kept until you select a different server. Logout revokes the saved credential and clears your local account and clan selection. The server address is available for your next sign-in. Revoke or unset environment credentials separately. If the server is unreachable, clqn still removes the local credential and reports that revocation failed.
 
 ## GitHub device login
 
-`clqn login --github` displays a URL and code, waits up to 15 minutes, and saves a clqn token. In JSON mode, prompts go to stderr and identity goes to stdout; tokens are not printed. Piped token login remains supported.
+`clqn login` in a terminal displays a GitHub link and code, waits up to 15 minutes, and saves a clqn credential. Use `--github` to choose GitHub when standard input is redirected. In JSON mode, prompts go to stderr and identity goes to stdout.
 
 GitHub accounts are bound by numeric user ID and require a verified primary email for invitations. Accounts are never linked by email: a collision with an operator-created account returns `account_conflict`. Account linking and primary-email changes require operator reconciliation.
 

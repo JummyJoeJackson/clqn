@@ -1,6 +1,6 @@
 # Hosting
 
-CLI and MCP run locally and connect to the operator's API URL. Self-host the API with Docker Compose on one machine, or run it on Cloud Run with managed Cloud SQL PostgreSQL.
+The CLI and agent connection run locally. A clqn server stores the shared workspaces that everyone connects to. Run it with Docker Compose for a local trial or deploy it to Cloud Run with managed Cloud SQL PostgreSQL for a team.
 
 ## Self-host with Docker Compose
 
@@ -8,15 +8,15 @@ From a clone of this repository, one command builds the API, starts PostgreSQL, 
 
 ```sh
 docker compose --profile server up --build -d --wait
-docker compose exec api node packages/api/dist/manage-user.js create you@example.com
-printf '%s' '<token>' | clqn --api-url http://127.0.0.1:8080 login
+docker compose exec -T api node packages/api/dist/manage-user.js create you@example.com \
+  | clqn login --server http://127.0.0.1:8080
 ```
 
-The second command prints a one-time personal token; deliver tokens privately. Rerun the first command after pulling updates; it rebuilds the image and applies new migrations.
+The second command creates a local account and pipes its credential directly to the CLI. Rerun the first command after pulling updates; it rebuilds the image and applies new migrations.
 
 Set `POSTGRES_PASSWORD`, `GITHUB_CLIENT_ID` ([GitHub login](#github-oauth-app)), and `GITHUB_WEBHOOK_SECRET` ([webhooks](#webhook-server-setup)) in a private `.env` file next to `docker-compose.yml` to configure them. Set `POSTGRES_PASSWORD` before the first start; the database keeps its original password afterward.
 
-Authenticated clients require HTTPS except on loopback. To share the API with teammates, put a TLS reverse proxy in front of port 8080, for example `caddy reverse-proxy --from clqn.example.com --to 127.0.0.1:8080`, and give them the HTTPS URL. Back up the `pgdata` volume.
+Authenticated clients require HTTPS except on loopback. To share the API with teammates, put a TLS reverse proxy in front of port 8080, for example `caddy reverse-proxy --from clqn.example.com --to 127.0.0.1:8080`, and give them the HTTPS URL for `clqn login --server <url>`. Back up the `pgdata` volume.
 
 ## Provision user credentials
 
@@ -132,7 +132,7 @@ Each instance allows 300 `/v1` requests per minute per credential and answers `4
 
 Storage is capped per account and clan: each user can create 25 clans and register 25 agents per clan, a clan holds up to 500 context entries, and each entry keeps its latest 100 revisions. Writes past a cap return `409 LIMIT_REACHED`. Change the caps in `packages/api/src/lib/limits.ts`.
 
-Set clients' `CLQN_API_URL` to the returned service URL. Keep `DATABASE_URL` server-side.
+Give teammates the HTTPS service URL for `clqn login --server <url>`. Keep `DATABASE_URL` server-side.
 
 ## GitHub webhook secret
 

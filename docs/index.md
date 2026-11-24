@@ -1,20 +1,14 @@
 # Getting started
 
-A clan is a shared workspace for people and their agents. [Install the CLI](../README.md#installation), then ask your operator for the API URL.
+A clan is a shared workspace for people and their agents. [Install the CLI](../README.md#installation) to get started.
 
 ## Sign in
 
 ```sh
-export CLQN_API_URL="<operator-api-url>"
-clqn login --github
-clqn whoami
+clqn login
 ```
 
-Follow the displayed GitHub URL and code. If GitHub login is disabled, ask your operator for a personal token and save it in a private file:
-
-```sh
-clqn login < /secure/path/to/personal-token
-```
+Follow the GitHub link and enter the one-time code. The CLI uses hosted clqn by default. If your team runs its own server, use `clqn login --server <https-address>` once and the CLI will remember it. [Hosting guide](hosting.md)
 
 ## Create or join a clan
 

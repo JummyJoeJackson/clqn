@@ -14,7 +14,16 @@ import {
   VERSION,
 } from '@clqn/shared';
 import { Command } from 'commander';
-import { type Config, readConfig, removeConfig, writeConfig } from './config.js';
+import {
+  type Config,
+  hostedServer,
+  legacyLocalServer,
+  preferredServer,
+  readConfig,
+  removeConfig,
+  writeConfig,
+  writeServer,
+} from './config.js';
 import {
   inspectPullRequest,
   localRepository,
@@ -26,22 +35,29 @@ import {
   taskWorktreeLocation,
 } from './git.js';
 import { configureGithubWebhook, removeGithubWebhook } from './github-hooks.js';
+import { loginServer, readLoginToken } from './login.js';
 import { runMcpSync } from './mcp-sync.js';
 import { renderActivity, renderMetrics } from './metrics.js';
 import { terminalText } from './terminal.js';
 
+let serverUrl = hostedServer;
 const program = new Command()
   .name('clqn')
   .description('Your agents. My agents. One workspace.')
   .version(VERSION)
-  .option('--api-url <url>', 'clqn API URL', process.env.CLQN_API_URL ?? 'http://127.0.0.1:3000')
+  .option('--api-url <url>', 'override the saved clqn server for this command')
   .option('--json', 'output machine-readable JSON')
   .option('--verbose', 'show Git and GitHub CLI error output, with credentials redacted')
-  .hook('preAction', () => {
+  .hook('preAction', async (_, command) => {
     if (program.opts().verbose) process.env.CLQN_VERBOSE = '1';
+    if (command.name() === 'login') return;
+    // An unscoped environment credential keeps its original loopback target.
+    serverUrl =
+      configuredServer() ?? (process.env.CLQN_TOKEN === undefined ? await preferredServer() : legacyLocalServer);
   });
 
-const apiUrl = () => program.opts().apiUrl as string;
+const configuredServer = () => program.opts<{ apiUrl?: string }>().apiUrl ?? process.env.CLQN_API_URL;
+const apiUrl = () => serverUrl;
 const verbatim = (value: unknown, text: string) => console.log(program.opts().json ? JSON.stringify(value) : text);
 const output = (value: unknown, human: string, urls?: readonly (string | null | undefined)[]) =>
   verbatim(value, terminalText(human, process.stdout.isTTY, urls));
@@ -53,6 +69,7 @@ const saveToken = async (token: string, scopedClan?: string) => {
   const { clanId } = await readConfig(apiUrl()).catch((): Config => ({}));
   const selected = scopedClan ?? clanId;
   await writeConfig(apiUrl(), selected ? { token, clanId: selected } : { token });
+  await writeServer(apiUrl());
 };
 const client = async () => new ClqnClient(apiUrl(), process.env.CLQN_TOKEN ?? (await readConfig(apiUrl())).token);
 
@@ -136,12 +153,29 @@ repo
 
 program
   .command('login')
-  .description('Log in with GitHub or a personal token from stdin')
-  .option('--github', 'sign in using GitHub device authorization')
-  .action(async (options: { github?: boolean }) => {
-    if (options.github || process.stdin.isTTY) {
+  .description('Sign in with GitHub')
+  .option('--server <url>', 'choose and remember a self-hosted server')
+  .option('--github', 'sign in using GitHub device authorization even when input is redirected')
+  .action(async (options: { github?: boolean; server?: string }) => {
+    const github = options.github === true || process.stdin.isTTY === true;
+    if (options.server !== undefined && program.opts().apiUrl !== undefined)
+      throw new Error('Use one server option for sign-in, either --server or --api-url');
+    serverUrl = await loginServer(options.server ?? configuredServer(), github);
+    if (github) {
       const api = new ClqnClient(apiUrl());
-      const attempt = await api.startGithubLogin();
+      const attempt = await api.startGithubLogin().catch((error: unknown) => {
+        if (error instanceof TypeError || (error as Error).name === 'TimeoutError') {
+          const destination = apiUrl() === hostedServer ? 'hosted clqn' : `clqn at ${apiUrl()}`;
+          throw new Error(`Could not reach ${destination}. Check your connection and try again.`);
+        }
+        if (error instanceof ApiError && error.status === 503 && error.code === 'UNAVAILABLE')
+          throw new ApiError(
+            error.status,
+            error.code,
+            'GitHub sign-in is unavailable on this server. Ask your server operator to enable it or provide a personal credential.',
+          );
+        throw error;
+      });
       console.error(
         terminalText(
           `Open GitHub to authorize clqn:\n${attempt.verificationUri}\n\nEnter this one-time GitHub code: ${attempt.userCode}`,
@@ -178,16 +212,7 @@ program
       }
       throw new Error('GitHub login expired; run login again');
     }
-    const chunks: Buffer[] = [];
-    let length = 0;
-    for await (const chunk of process.stdin) {
-      const buffer = Buffer.from(chunk);
-      length += buffer.length;
-      if (length > 4096) throw new Error('Token input is too long');
-      chunks.push(buffer);
-    }
-    const token = Buffer.concat(chunks).toString('utf8').trim();
-    if (!token || /\s/.test(token)) throw new Error('Provide one nonempty token on standard input');
+    const token = await readLoginToken();
     const user = await new ClqnClient(apiUrl(), token).whoami();
     await saveToken(token, user.clanId);
     output(user, `Logged in as ${user.email}`);

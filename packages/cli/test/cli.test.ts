@@ -138,10 +138,15 @@ async function workspaceFixture(t: TestContext) {
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   // Leave CLQN_TOKEN absent by default so persisted credentials are exercised.
-  const call = (args: string[], options: { env?: Record<string, string>; input?: string } = {}) => {
+  const call = (
+    args: string[],
+    options: { env?: Record<string, string>; input?: string; useSavedServer?: boolean } = {},
+  ) => {
     const environment: NodeJS.ProcessEnv = { ...process.env, CLQN_CONFIG_DIR: directory, ...options.env };
     if (!options.env || !Object.hasOwn(options.env, 'CLQN_TOKEN')) delete environment.CLQN_TOKEN;
-    const result = run(process.execPath, [...sourceNodeArgs, cli, '--api-url', url, ...args], { env: environment });
+    if (!options.env || !Object.hasOwn(options.env, 'CLQN_API_URL')) delete environment.CLQN_API_URL;
+    const server = options.useSavedServer ? [] : ['--api-url', url];
+    const result = run(process.execPath, [...sourceNodeArgs, cli, ...server, ...args], { env: environment });
     result.child.stdin?.end(options.input);
     return result;
   };
@@ -209,7 +214,7 @@ test('CLI login, clan creation, membership, and logout persist API-scoped privat
   assert.deepEqual(JSON.parse(loggedIn.stdout), f.user);
   assert.equal(loggedIn.stderr, '');
   assert.ok(!loggedIn.stdout.includes(f.token));
-  const [filename] = await readdir(f.directory);
+  const filename = (await readdir(f.directory)).find((name) => name.endsWith('.json'));
   assert.ok(filename);
   assert.equal((await stat(f.directory)).mode & 0o777, 0o700);
   assert.equal((await stat(join(f.directory, filename))).mode & 0o777, 0o600);
@@ -240,7 +245,7 @@ test('CLI login, clan creation, membership, and logout persist API-scoped privat
   const logout = JSON.parse((await f.call(['logout', '--json'])).stdout);
   assert.deepEqual(logout, { credentialsRemoved: true, tokenRevoked: true, environmentTokenActive: false });
   assert.deepEqual(f.requests.at(-1), { path: '/v1/logout', authorization: `Bearer ${f.token}` });
-  assert.deepEqual(await readdir(f.directory), []);
+  assert.deepEqual(await readdir(f.directory), ['server']);
   await assert.rejects(f.call(['whoami', '--json']), (thrown) => {
     const error = thrown as ExecError;
     assert.equal(error.code, 1);
@@ -287,4 +292,30 @@ test('login requires token input and members requires a selected clan', async (t
     });
   }
   assert.equal(f.requests.length, 0);
+});
+
+test('login --server saves the origin for later commands and accepts provisioning JSON from stdin', async (t) => {
+  const { readFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const f = await workspaceFixture(t);
+  const explicitLogin = (url: string, token: string) =>
+    f.call(['login', '--server', url, '--json'], {
+      input: JSON.stringify({ token, user: f.user, credentialId: f.user.id }),
+      useSavedServer: true,
+    });
+  const login = await explicitLogin(`${f.url}/ignored?setup=1`, f.token);
+  assert.deepEqual(JSON.parse(login.stdout), f.user);
+  assert.equal(login.stderr, '');
+  assert.ok(!login.stdout.includes(f.token));
+  assert.equal((await readFile(join(f.directory, 'server'), 'utf8')).trim(), f.url);
+  const clans = await f.call(['clans', '--json'], { useSavedServer: true });
+  assert.deepEqual(JSON.parse(clans.stdout), { clans: [f.clan] });
+
+  const other = await workspaceFixture(t);
+  await assert.rejects(explicitLogin(other.url, 'invalid_token'));
+  assert.equal((await readFile(join(f.directory, 'server'), 'utf8')).trim(), f.url);
+  await assert.rejects(f.call(['whoami', '--json'], { useSavedServer: true, env: { CLQN_API_URL: other.url } }));
+  assert.equal(other.requests.at(-1)?.authorization, undefined);
+  const who = await f.call(['whoami', '--json'], { useSavedServer: true });
+  assert.deepEqual(JSON.parse(who.stdout), f.user);
 });

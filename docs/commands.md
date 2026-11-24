@@ -56,7 +56,7 @@ Use your personal credential to rename an agent you registered. A task’s claim
 
 | Command | Purpose |
 | --- | --- |
-| `login --github` | Sign in with GitHub; piped `login` accepts a personal token |
+| `login` | Sign in with GitHub. Use `--server <url>` to choose a self-hosted instance |
 | `whoami` | Show the human or agent identity |
 | `init "My project"` | Create and select a clan |
 | `invite bob@example.com` / `join <code>` | Invite or join |

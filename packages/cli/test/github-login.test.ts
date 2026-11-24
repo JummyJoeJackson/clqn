@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import { sourceNodeArgs } from '../../../scripts/test-node.js';
-import { readConfig } from '../src/config.js';
+import { readConfig, readServer } from '../src/config.js';
 
 test('GitHub CLI saves only clqn token, prints identity without credentials, uses POST polling', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'clqn-github-'));
@@ -45,7 +45,7 @@ test('GitHub CLI saves only clqn token, prints identity without credentials, use
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const result = await promisify(execFile)(
     process.execPath,
-    [...sourceNodeArgs, 'packages/cli/src/index.ts', '--api-url', url, '--json', 'login', '--github'],
+    [...sourceNodeArgs, 'packages/cli/src/index.ts', '--json', 'login', '--server', url, '--github'],
     {
       env: { ...process.env, CLQN_CONFIG_DIR: dir, CLQN_TOKEN: '' },
       timeout: 15000,
@@ -58,13 +58,14 @@ test('GitHub CLI saves only clqn token, prints identity without credentials, use
   process.env.CLQN_CONFIG_DIR = dir;
   try {
     assert.equal((await readConfig(url)).token, token);
+    assert.equal(await readServer(), url);
   } finally {
     if (previous === undefined) delete process.env.CLQN_CONFIG_DIR;
     else process.env.CLQN_CONFIG_DIR = previous;
   }
 });
 
-test('GitHub CLI login retries a temporary poll failure until the code expires', async (t) => {
+test('GitHub CLI login reuses the saved server and retries a temporary poll failure', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'clqn-github-'));
   const token = `clqn_${'b'.repeat(43)}`;
   const user = { id: randomUUID(), email: 'verified@example.com' };
@@ -93,11 +94,12 @@ test('GitHub CLI login retries a temporary poll failure until the code expires',
     await rm(dir, { recursive: true, force: true });
   });
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  await writeFile(join(dir, 'server'), url, { mode: 0o600 });
   const result = await promisify(execFile)(
     process.execPath,
-    [...sourceNodeArgs, 'packages/cli/src/index.ts', '--api-url', url, '--json', 'login', '--github'],
+    [...sourceNodeArgs, 'packages/cli/src/index.ts', '--json', 'login', '--github'],
     {
-      env: { ...process.env, CLQN_CONFIG_DIR: dir, CLQN_TOKEN: '' },
+      env: { ...process.env, CLQN_CONFIG_DIR: dir, CLQN_TOKEN: '', CLQN_API_URL: undefined },
       timeout: 30000,
     },
   );
