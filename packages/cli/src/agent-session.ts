@@ -167,20 +167,18 @@ export function agentOutput(runtime: Runtime, stdout: string): { tokens: number;
     } catch {
       continue;
     }
+    // Tokens count everything but cache reads: each API call resends the whole conversation, mostly from the
+    // cache, so adding cache reads would count the same context again on every call. See docs/chat.md.
     if (runtime === 'claude') {
+      // Claude Code reports usage summed over the run.
       const usage = object(event.usage);
-      tokens = count(
-        usage.input_tokens,
-        usage.cache_creation_input_tokens,
-        usage.cache_read_input_tokens,
-        usage.output_tokens,
-      );
+      tokens = count(usage.input_tokens, usage.cache_creation_input_tokens, usage.output_tokens);
       if (typeof event.result === 'string') text = event.result;
       if (event.is_error === true) error = text ?? 'Claude Code reported an error';
     } else if (event.type === 'turn.completed') {
-      // Codex input tokens already include cached input.
+      // Codex input tokens include cached input.
       const usage = object(event.usage);
-      tokens += count(usage.input_tokens, usage.output_tokens);
+      tokens += count(usage.input_tokens, usage.output_tokens) - count(usage.cached_input_tokens);
     } else if (event.type === 'turn.failed' || event.type === 'error') {
       const detail = event.type === 'error' ? event.message : object(event.error).message;
       if (typeof detail === 'string') error = detail;

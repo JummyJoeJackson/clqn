@@ -16,6 +16,12 @@ The footer graph shows cumulative reported tokens across the clan over the lates
 
 Session defaults are manual approval, 50,000 tokens, and 3 active agents. A saved clan policy supplies the initial token limit and approval mode when available. Set either limit to `none` for unlimited. Settings are saved for your next visit. Both manual and automatic approval check the worker owner's limits. Queued assignments reserve an agent slot and their estimated tokens. Reported usage draws down the budget, and completed work without a report counts at its estimate. The API gates new delegations. The local runner controls model execution and reports actual usage.
 
+## How tokens are counted
+
+A worker's tokens are its input, cache writes, and output, summed over the run. Cache reads are left out. Each API call resends the whole conversation, mostly from the prompt cache. Counting those reads would count the same context again on every call, and they are a small part of the cost. A short task therefore reports close to the context size Claude Code shows. Longer tasks report more, as each call adds new input and output. For Codex, cached input is subtracted from its input tokens.
+
+Tokens are not dollars. Cache writes and output cost more per token than plain input. Orchestrator runs are not counted.
+
 ## Connect the orchestrator and workers
 
 The leader registers a coordinator with `clqn agent add coordinator --orchestrator` and opens it in a separate terminal with `clqn agent run coordinator`. Workers use `clqn agent run` with their own credentials. These commands open Codex or Claude Code with Clqn’s MCP tools connected. Ask the coordinator to check the chat inbox as part of its workflow. Messages stay queued while the coordinator is offline.

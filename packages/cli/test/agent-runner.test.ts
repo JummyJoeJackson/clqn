@@ -257,7 +257,7 @@ test('approved runs start this member’s worker with its model, report usage, a
   assert.deepEqual(transitions, [`claim ${first}`, `complete ${first}`]);
   assert.equal(reports.length, 1);
   const report = reports[0] as { tokens: number; result: { id: string; text: string } };
-  assert.equal(report.tokens, 120);
+  assert.equal(report.tokens, 80);
   assert.equal(report.result.text, 'Fixed it.');
 
   runner.update(state);
@@ -300,19 +300,19 @@ test('runtime output yields total tokens and the final message', () => {
       'claude',
       '{"result":" Done. ","usage":{"input_tokens":5,"cache_creation_input_tokens":6,"cache_read_input_tokens":7,"output_tokens":8}}',
     ),
-    { tokens: 26, text: 'Done.' },
+    { tokens: 19, text: 'Done.' },
   );
   assert.deepEqual(agentOutput('claude', 'not json'), { tokens: 0 });
   assert.deepEqual(
     agentOutput(
       'codex',
       [
-        '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}',
+        '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":2}}',
         'noise',
         '{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":1}}',
       ].join('\n'),
     ),
-    { tokens: 16 },
+    { tokens: 12 },
   );
 });
 

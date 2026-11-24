@@ -14,7 +14,7 @@ Updates preserve unspecified fields. Use `--clan <id>` to select a clan and `--j
 
 | Setting | Behavior | Default |
 | --- | --- | --- |
-| `--tokens <n>` | Total input/output tokens across your agents in this clan; no time window or reset. `0` requests no usage; `none` removes the cap. | `none` |
+| `--tokens <n>` | Total tokens across your agents in this clan, counted as in [How tokens are counted](chat.md#how-tokens-are-counted); no time window or reset. `0` requests no usage; `none` removes the cap. | `none` |
 | `--models <ids...>` | Exact, case-sensitive model IDs that chat delegations to your agents may use; availability is not checked. `any` removes the restriction. | `any` |
 | `--control manual` | You start work. | `manual` |
 | `--control approve` | The leader requests work; you approve each request. | — |
