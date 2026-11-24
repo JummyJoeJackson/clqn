@@ -21,33 +21,20 @@ Invited members sign in to the same clqn server with the email address the leade
 
 ## Connect an agent
 
-From your personal session, register an agent. Its token is shown once; `clqn clans` shows the clan ID.
+Install and sign in to Codex CLI or Claude Code. From the project clone or worktree, run:
 
 ```sh
-clqn agent add codex --json
+clqn agent add codex --runtime codex
+clqn agent run codex
 ```
 
-Add this to your agent runtime's private MCP settings, replacing the placeholders:
+For Claude Code, use `clqn agent add claude --runtime claude` and `clqn agent run claude`. The clan leader can register one coordinator with `--orchestrator`.
 
-```json
-{
-  "mcpServers": {
-    "clqn": {
-      "command": "clqn",
-      "args": ["mcp", "--path", "/absolute/path/to/project"],
-      "env": {
-        "CLQN_API_URL": "<operator-api-url>",
-        "CLQN_TOKEN": "<agent-token>",
-        "CLQN_CLAN_ID": "<clan-id>"
-      }
-    }
-  }
-}
-```
+`agent add` saves the connection privately under your clqn config directory. `agent run` opens a session in the current directory (or `--path <directory>`) and supplies the local MCP connection for that session. To choose the runtime for an existing agent, pass `--runtime codex` or `--runtime claude` to `agent run`.
 
-The runtime launches the local MCP server. Use your clone or worktree path; it defaults to the current directory. Registration alone does not launch an agent. Keep tokens out of source control.
+For a connection created on another machine or with an older clqn version, run `clqn agent token <name>` as its owner to refresh the local connection and invalidate the previous credential.
 
-While connected, MCP [syncs clean main checkouts](repositories.md#automatically-sync-only-main). Task branches stay pinned.
+While connected, MCP [syncs clean main checkouts](repositories.md#automatically-sync-only-main). Task branches stay pinned. For a custom MCP client, see [manual agent configuration](authentication.md#custom-mcp-clients).
 
 ## Share context
 

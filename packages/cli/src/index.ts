@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { resolve } from 'node:path';
 import { serveMcp } from '@clqn/mcp';
 import {
+  type Agent,
   ApiError,
   ClqnClient,
   createClanSchema,
@@ -15,7 +17,16 @@ import {
   updatePolicySchema,
   VERSION,
 } from '@clqn/shared';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
+import {
+  type AgentProfile,
+  agentProfilePath,
+  type Runtime,
+  readAgentProfile,
+  runAgentSession,
+  runtimes,
+  saveAgentProfile,
+} from './agent-session.js';
 import {
   type Config,
   hostedServer,
@@ -43,6 +54,7 @@ import { renderActivity, renderMetrics } from './metrics.js';
 import { terminalText } from './terminal.js';
 
 let serverUrl = hostedServer;
+let sessionProfile: AgentProfile | undefined;
 const program = new Command()
   .name('clqn')
   .description('Your agents. My agents. One workspace.')
@@ -50,8 +62,19 @@ const program = new Command()
   .option('--api-url <url>', 'override the saved clqn server for this command')
   .option('--json', 'output machine-readable JSON')
   .option('--verbose', 'show Git and GitHub CLI error output, with credentials redacted')
-  .hook('preAction', async (_, command) => {
+  .hook('preAction', async (_root, command) => {
     if (program.opts().verbose) process.env.CLQN_VERBOSE = '1';
+    const path = command.name() === 'mcp' ? (command.opts().profile as string | undefined) : undefined;
+    const profilePath = path ?? process.env.CLQN_AGENT_PROFILE;
+    if (profilePath !== undefined) {
+      if (['login', 'logout', 'run', 'use'].includes(command.name()))
+        throw new Error('Run that command from your personal terminal.');
+      sessionProfile = await readAgentProfile(profilePath);
+      if (!sessionProfile)
+        throw new Error('The saved agent connection is missing. Refresh it from your personal terminal.');
+      serverUrl = sessionProfile.server;
+      return;
+    }
     if (command.name() === 'login') return;
     // An unscoped environment credential keeps its original loopback target.
     serverUrl =
@@ -73,7 +96,8 @@ const saveToken = async (token: string, scopedClan?: string) => {
   await writeConfig(apiUrl(), selected ? { token, clanId: selected } : { token });
   await writeServer(apiUrl());
 };
-const client = async () => new ClqnClient(apiUrl(), process.env.CLQN_TOKEN ?? (await readConfig(apiUrl())).token);
+const client = async () =>
+  new ClqnClient(apiUrl(), sessionProfile?.token ?? process.env.CLQN_TOKEN ?? (await readConfig(apiUrl())).token);
 
 program
   .command('health')
@@ -275,7 +299,7 @@ program
   .action(async () => {
     const result = await (await client()).listClans();
     const { clanId } = await readConfig(apiUrl());
-    const active = process.env.CLQN_CLAN_ID ?? clanId;
+    const active = sessionProfile?.clanId ?? process.env.CLQN_CLAN_ID ?? clanId;
     output(
       result,
       result.clans.map((clan) => `${clan.name}${clan.id === active ? ' (current)' : ''}`).join('\n') ||
@@ -402,6 +426,7 @@ program
   });
 
 const selectedClan = async (options: { clan?: string } = {}) => {
+  if (sessionProfile) return options.clan ?? sessionProfile.clanId;
   if (options.clan ?? process.env.CLQN_CLAN_ID) return (options.clan ?? process.env.CLQN_CLAN_ID)!;
   const config = await readConfig(apiUrl());
   // A saved selection already matches a saved token, so only ask the API about an environment token
@@ -468,29 +493,101 @@ const readText = async () => {
   }
   return Buffer.concat(chunks).toString('utf8');
 };
-const agent = program.command('agent').description('Register and list agents');
+const agent = program.command('agent').description('Register, run, and list agents');
+const agentLabel = (entry: Agent) =>
+  entry.alias && entry.name !== entry.alias ? `${entry.name} (${entry.alias})` : entry.name;
+const agentSummary = (entry: Agent) => ({
+  name: entry.name,
+  role: entry.role,
+  ...(entry.alias ? { alias: entry.alias } : {}),
+});
+const runtimeOption = () => new Option('--runtime <name>', 'agent runtime').choices(runtimes);
+const rememberAgent = async (result: { agent: Agent; token: string }, runtime?: Runtime) => {
+  const entry = result.agent;
+  try {
+    await saveAgentProfile({
+      agentId: entry.id,
+      clanId: entry.clanId,
+      server: apiUrl(),
+      token: result.token,
+      runtime,
+    });
+  } catch {
+    throw new Error(
+      'The agent was saved on the server, but clqn could not save its local connection. Check your clqn config directory and run clqn agent token with the agent name.',
+    );
+  }
+};
 agent
   .command('add <name>')
-  .description('Register an agent under your identity')
+  .description('Register an agent and save its local connection')
   .option('--clan <id>', 'clan ID')
   .option('--alias <alias>', 'short name for assignment (defaults to the name if valid)')
   .option('--orchestrator', 'register the clan orchestrator (leader only, one per clan)')
-  .action(async (name: string, options: { clan?: string; orchestrator?: boolean; alias?: string }) => {
-    const registration = registerAgentSchema.parse({
-      name,
-      role: options.orchestrator ? 'orchestrator' : 'worker',
-      alias: options.alias ?? defaultAlias(name),
-    });
-    const result = await (await client()).registerAgent(
-      await selectedClan(options),
-      registration.name,
-      registration.role,
-      registration.alias,
-    );
-    output(
-      result,
-      `Registered ${result.agent.name}: ${displayId(result.agent)}\nToken (shown once): ${result.token}\nConfigure CLQN_TOKEN and CLQN_CLAN_ID in your agent environment, then run clqn mcp.`,
-    );
+  .addOption(runtimeOption())
+  .option('--show-token', 'include the credential for a custom runtime')
+  .action(
+    async (
+      name: string,
+      options: { clan?: string; orchestrator?: boolean; alias?: string; runtime?: Runtime; showToken?: boolean },
+    ) => {
+      const registration = registerAgentSchema.parse({
+        name,
+        role: options.orchestrator ? 'orchestrator' : 'worker',
+        alias: options.alias ?? defaultAlias(name),
+      });
+      const result = await (await client()).registerAgent(
+        await selectedClan(options),
+        registration.name,
+        registration.role,
+        registration.alias,
+      );
+      await rememberAgent(result, options.runtime);
+      const reference = result.agent.alias ?? result.agent.name;
+      const quoted = result.agent.alias ?? `'${reference.replaceAll("'", "'\\''")}'`;
+      const launchOptions = `${options.clan ? ` --clan ${result.agent.clanId}` : ''}${options.runtime ? '' : ' --runtime codex'}`;
+      const launch = reference.startsWith('-')
+        ? `clqn agent run${launchOptions} -- ${quoted}`
+        : `clqn agent run ${quoted}${launchOptions}`;
+      const added = `Registered ${agentLabel(result.agent)} as a ${result.agent.role}.`;
+      output(
+        options.showToken ? result : { agent: agentSummary(result.agent) },
+        options.showToken ? `${added}\n${result.token}` : `${added}\nStart a session with ${launch}`,
+      );
+    },
+  );
+agent
+  .command('run <agent>')
+  .description('Start a Codex or Claude Code session with this agent connected to clqn')
+  .option('--clan <id>', 'clan ID')
+  .option('--path <directory>', 'project clone or worktree (defaults to current directory)', '.')
+  .addOption(runtimeOption())
+  .action(async (reference: string, options: { clan?: string; path: string; runtime?: Runtime }) => {
+    if (program.opts().json) throw new Error('Run clqn agent run in a terminal without --json.');
+    const api = await client();
+    const { agents } = await api.listAgents(await selectedClan(options));
+    const matches = agents.filter((entry) => entry.name === reference);
+    const exact = agents.find((entry) => entry.alias === reference || entry.id === reference);
+    if (!exact && matches.length > 1)
+      throw new Error('Several agents have that name. Use an alias or ID from clqn agent list --json.');
+    const entry = exact ?? matches[0];
+    if (!entry) throw new Error('Agent not found. Run clqn agent list to see your agents.');
+    const path = agentProfilePath(apiUrl(), entry.id);
+    const profile = await readAgentProfile(path);
+    if (!profile || entry.active === false)
+      throw new Error('Refresh this agent’s local connection with clqn agent token <agent>.');
+    const runtime = options.runtime ?? profile.runtime;
+    if (!runtime) throw new Error('Choose a runtime with --runtime codex or --runtime claude.');
+    try {
+      const actor = await new ClqnClient(profile.server, profile.token).whoami();
+      if (actor.agentId !== entry.id || actor.clanId !== entry.clanId)
+        throw new Error('The saved connection belongs to a different agent.');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401)
+        throw new Error('Refresh this agent’s local connection with clqn agent token <agent>.');
+      throw error;
+    }
+    await runAgentSession(runtime, path, resolve(options.path));
   });
 agent
   .command('list')
@@ -499,12 +596,8 @@ agent
     const result = await (await client()).listAgents(await selectedClan(options));
     output(
       result,
-      result.agents
-        .map(
-          (a) =>
-            `${displayId(a)}  ${a.name}  role=${a.role}  owner=${a.ownerId}${a.active === false ? '  revoked' : ''}`,
-        )
-        .join('\n') || 'No agents.',
+      result.agents.map((a) => `${agentLabel(a)}  ${a.role}${a.active === false ? '  revoked' : ''}`).join('\n') ||
+        'No agents.',
     );
   });
 agent
@@ -517,11 +610,18 @@ agent
   });
 agent
   .command('token <agent>')
-  .description('Replace the token of an agent you registered; the old token stops working')
+  .description('Refresh an agent’s local connection and invalidate its old credential')
   .option('--clan <id>', 'clan ID')
-  .action(async (id: string, options: { clan?: string }) => {
+  .option('--show-token', 'include the credential for a custom runtime')
+  .action(async (id: string, options: { clan?: string; showToken?: boolean }) => {
     const result = await (await client()).rotateAgentToken(await selectedClan(options), id);
-    output(result, `New token for ${displayId(result.agent)} (shown once): ${result.token}`);
+    const previous = await readAgentProfile(agentProfilePath(apiUrl(), result.agent.id)).catch(() => undefined);
+    await rememberAgent(result, previous?.runtime);
+    const refreshed = `Refreshed the local connection for ${agentLabel(result.agent)}.`;
+    output(
+      options.showToken ? result : { agent: agentSummary(result.agent) },
+      options.showToken ? `${refreshed}\n${result.token}` : refreshed,
+    );
   });
 agent
   .command('alias <agent> <alias>')
@@ -848,11 +948,14 @@ program
   .command('mcp', { hidden: true })
   .description('Start the local stdio MCP server and automatic main sync')
   .option('--path <directory>', 'project clone or worktree (defaults to current directory)', '.')
+  .addOption(new Option('--profile <path>').hideHelp())
   .action(async (options: { path: string }) => {
     const api = await client();
-    const config = await readConfig(apiUrl());
-    const scopedClan = process.env.CLQN_TOKEN || config.token ? (await api.whoami()).clanId : undefined;
-    const clanId = process.env.CLQN_CLAN_ID ?? scopedClan ?? config.clanId;
+    const config = sessionProfile ? {} : await readConfig(apiUrl());
+    const actor = sessionProfile || process.env.CLQN_TOKEN || config.token ? await api.whoami() : undefined;
+    if (sessionProfile && (actor?.agentId !== sessionProfile.agentId || actor?.clanId !== sessionProfile.clanId))
+      throw new Error('The saved connection belongs to a different agent.');
+    const clanId = sessionProfile?.clanId ?? process.env.CLQN_CLAN_ID ?? actor?.clanId ?? config.clanId;
     const controller = new AbortController();
     const stop = () => controller.abort();
     const server = await serveMcp(api, clanId, stop);
@@ -888,6 +991,12 @@ try {
   await program.parseAsync();
 } catch (error) {
   const message = error instanceof Error ? error.message : 'Command failed';
+  let humanMessage = message;
+  if (error instanceof ApiError && error.status === 401 && !process.env.CLQN_TOKEN) {
+    humanMessage = sessionProfile
+      ? 'Refresh this agent’s local connection from your personal terminal.'
+      : 'Run clqn login to sign in, then try again.';
+  }
   console.error(
     program.opts().json
       ? JSON.stringify({
@@ -896,7 +1005,7 @@ try {
             message,
           },
         })
-      : terminalText(`Error: ${message}`, process.stderr.isTTY),
+      : terminalText(`Error: ${humanMessage}`, process.stderr.isTTY),
   );
   process.exitCode = 1;
 }

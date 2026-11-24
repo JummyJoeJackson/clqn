@@ -167,7 +167,7 @@ No client secret is needed. Keep database and webhook settings intact. Unset `GI
 Before relying on a deployment, test on separate machines with real Codex and Claude Code applications:
 
 1. Sign in as two people; create a clan, invite, and join.
-2. Register each agent and configure its own scoped token.
+2. Register an agent on each machine and launch a connected session with `clqn agent run`.
 3. Share context, update it, inspect history, and confirm stale revisions fail.
 4. Assign, claim, submit, merge, and complete a code task. Confirm other actors cannot claim assigned work or complete it; test owner and leader release.
 5. Check `status`, `log`, live webhook delivery, clean-main sync, and missed-delivery fallback.

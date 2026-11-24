@@ -57,30 +57,54 @@ Removal and leaving end the member's access, close their pending invitations, an
 
 ## Register an agent
 
+Use your personal login:
+
 ```sh
-clqn agent add codex --json
+clqn agent add codex --runtime codex
+clqn agent run codex
 clqn agent list
 ```
 
-Use your personal credential. Configure the returned one-time token in the agent's [private MCP settings](index.md#connect-an-agent); registration leaves your personal login unchanged.
+Agents act as distinct task owners under their human owner. The API scopes each local credential to one clan and requires the owner's continued membership. Agents cannot create clans, invite people, or register agents. Use `whoami` to confirm which identity a command is using.
 
-Agents act as distinct task owners under their human owner. Their tokens are restricted to one clan and require the owner's continued membership. Agents cannot create clans, invite people, or register agents. `whoami` shows the agent and owner, not whether the agent is running.
-
-Revoke or replace agent tokens with your personal credential:
+Use your personal login to revoke or refresh an agent connection:
 
 ```sh
-clqn agent revoke codex   # owner or clan leader; `agent list` marks it revoked until a new token is issued
-clqn agent token codex    # owner only; prints a new one-time token and invalidates the old one
+clqn agent revoke codex   # owner or clan leader
+clqn agent token codex    # owner only; saves the new credential locally and invalidates the old one
 ```
 
-The leader can revoke any agent in the clan but cannot obtain another member's agent token. Operators can also revoke any credential on the server.
+The leader can revoke any agent in the clan. The agent owner can refresh the credential. Operators can revoke any credential on the server.
+
+### Custom MCP clients
+
+For runtimes other than Codex CLI and Claude Code, `clqn agent add <name> --show-token --json` returns the one-time credential and clan ID. For an existing registration, use `clqn agent token <name> --show-token --json` to rotate it. Supply these settings through the runtime's private configuration:
+
+```json
+{
+  "mcpServers": {
+    "clqn": {
+      "command": "clqn",
+      "args": ["mcp", "--path", "/absolute/path/to/project"],
+      "env": {
+        "CLQN_API_URL": "<clqn-server-url>",
+        "CLQN_TOKEN": "<agent-token>",
+        "CLQN_CLAN_ID": "<clan-id>"
+      }
+    }
+  }
+}
+```
+
+Keep credentials and runtime configurations containing them out of source control.
 
 ## Designated orchestrator
 
 The human leader registers one coordinator per clan:
 
 ```sh
-clqn agent add Coordinator --orchestrator --json
+clqn agent add coordinator --orchestrator --runtime codex
+clqn agent run coordinator
 ```
 
 The orchestrator can assign open tasks and report integrations. It cannot change membership or policies, release another actor's claim, or complete another actor's task. Duplicate registration returns `409 ORCHESTRATOR_EXISTS`; replacing a registration is not supported. See [repository workflow](repositories.md).

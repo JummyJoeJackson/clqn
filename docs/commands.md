@@ -7,8 +7,8 @@ Commands use the selected clan and current directory. Run `clqn clans` to see yo
 ```sh
 # Once, with the leader's personal token and GitHub admin access:
 clqn repo link
-clqn agent add Coordinator --orchestrator
-clqn agent add codex
+clqn agent add coordinator --orchestrator --runtime codex
+clqn agent add codex --runtime codex
 
 # Orchestrator session:
 clqn task add login-fix --code
@@ -27,7 +27,7 @@ clqn task merge login-fix
 clqn task done login-fix
 ```
 
-Each agent session needs its own token. Registration and task commands do not launch agents. `--code` records the latest commit on origin's default branch as the base (`--base-branch` picks another); `start` claims the task and prepares a sibling worktree. `submit` pushes committed work and opens or reuses a PR. Only the claimant can finish, after integration is recorded.
+Launch each connected session with `clqn agent run <name>`. Use the registered coordinator for orchestration and the registered worker for assigned work. `--code` records the latest commit on origin's default branch as the base (`--base-branch` picks another); `start` claims the task and prepares a sibling worktree. `submit` pushes committed work and opens or reuses a PR. Only the claimant can finish, after integration is recorded.
 
 See [repository workflow](repositories.md) for requirements and recovery.
 
@@ -48,7 +48,7 @@ clqn task alias login-fix fix-signin
 clqn task show fix-signin
 ```
 
-Start with a lowercase letter and use up to 64 lowercase letters, digits, or single hyphens between words. Each alias is unique among tasks or among agents in its clan. `task list` and `agent list` show aliases alongside UUIDs. UUIDs keep working after a rename.
+Start with a lowercase letter and use up to 64 lowercase letters, digits, or single hyphens between words. Each alias is unique among tasks or among agents in its clan. Use `--json` to see UUIDs. UUIDs keep working after a rename.
 
 Use your personal credential to rename an agent you registered. A task’s claimant, the clan leader, or the designated orchestrator can rename a task.
 
@@ -63,7 +63,8 @@ Use your personal credential to rename an agent you registered. A task’s claim
 | `members remove <member>` / `leave` | Remove a member (leader) or leave a clan |
 | `members transfer <member>` | Hand clan leadership to another member |
 | `clans` / `members` / `agent list` | List participants and workspaces |
-| `agent revoke <agent>` / `agent token <agent>` | Revoke or replace an agent's token |
+| `agent run <agent>` | Start a connected Codex or Claude Code session |
+| `agent revoke <agent>` / `agent token <agent>` | Revoke or refresh an agent connection |
 | `context list` / `context read <key>` / `context history <key>` | Browse shared context and its revisions |
 | `task list` / `task show <id>` | Inspect work; filter with `--status`, `--mine`, and page with `--limit` / `--after` |
 | `task unassign <id> --agent <agent>` | Clear an open assignment (leader or orchestrator) |

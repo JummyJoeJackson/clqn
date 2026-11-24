@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 export interface Config {
   token?: string;
@@ -28,9 +28,9 @@ export function serverOrigin(address: string): string {
   return url.origin;
 }
 
-const directory = () => process.env.CLQN_CONFIG_DIR ?? join(homedir(), '.config', 'clqn');
+export const configDirectory = () => process.env.CLQN_CONFIG_DIR ?? join(homedir(), '.config', 'clqn');
 const filename = (apiUrl: string) =>
-  join(directory(), `${createHash('sha256').update(new URL(apiUrl).origin).digest('hex')}.json`);
+  join(configDirectory(), `${createHash('sha256').update(new URL(apiUrl).origin).digest('hex')}.json`);
 
 export async function readConfig(apiUrl: string): Promise<Config> {
   let contents: string;
@@ -59,8 +59,9 @@ export async function readConfig(apiUrl: string): Promise<Config> {
 }
 
 async function writePrivateFile(path: string, contents: string): Promise<void> {
-  await mkdir(directory(), { recursive: true, mode: 0o700 });
-  await chmod(directory(), 0o700);
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, contents, { mode: 0o600, flag: 'wx' });
@@ -70,15 +71,19 @@ async function writePrivateFile(path: string, contents: string): Promise<void> {
   }
 }
 
+export function writePrivateJson(path: string, value: unknown): Promise<void> {
+  return writePrivateFile(path, `${JSON.stringify(value)}\n`);
+}
+
 export function writeConfig(apiUrl: string, config: Config): Promise<void> {
-  return writePrivateFile(filename(apiUrl), `${JSON.stringify(config)}\n`);
+  return writePrivateJson(filename(apiUrl), config);
 }
 
 export async function removeConfig(apiUrl: string): Promise<void> {
   await rm(filename(apiUrl), { force: true });
 }
 
-const serverFile = () => join(directory(), 'server');
+const serverFile = () => join(configDirectory(), 'server');
 
 export async function readServer(): Promise<string | undefined> {
   try {

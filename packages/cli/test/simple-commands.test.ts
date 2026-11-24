@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -28,6 +28,9 @@ async function fixture(t: TestContext) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const token = `clqn_${'s'.repeat(43)}`;
   const user = { id: userId, email: 'member@example.com' };
+  const agentToken = `clqn_${'a'.repeat(43)}`;
+  const agentActor = { ...user, agentId, clanId };
+  let registered: { id: string; name: string; role: string; alias?: string } | undefined;
   const task = {
     id: taskId,
     clanId,
@@ -71,18 +74,20 @@ async function fixture(t: TestContext) {
     const body = raw ? JSON.parse(raw) : undefined;
     requests.push({ method: request.method, path: request.url, authorization: request.headers.authorization, body });
     response.setHeader('content-type', 'application/json');
-    if (request.headers.authorization !== `Bearer ${token}`) {
+    if (request.headers.authorization === `Bearer ${agentToken}` && request.url === '/v1/me') {
+      response.end(JSON.stringify(agentActor));
+    } else if (request.headers.authorization === `Bearer ${agentToken}` && request.url === '/v1/agent') {
+      response.end(JSON.stringify(registered));
+    } else if (request.headers.authorization !== `Bearer ${token}`) {
       response.writeHead(401);
       response.end(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Token required' } }));
     } else if (request.url === '/v1/me') response.end(JSON.stringify(user));
     else if (request.url === `/v1/clans/${clanId}/agents` && request.method === 'POST') {
       response.writeHead(201);
-      response.end(
-        JSON.stringify({
-          agent: { id: agentId, ownerId: userId, clanId, name: body.name, role: body.role, createdAt },
-          token,
-        }),
-      );
+      registered = { id: agentId, ownerId: userId, clanId, createdAt, ...body };
+      response.end(JSON.stringify({ agent: registered, token: agentToken }));
+    } else if (request.url === `/v1/clans/${clanId}/agents`) {
+      response.end(JSON.stringify({ agents: registered ? [registered] : [] }));
     } else if (request.url === `/v1/clans/${clanId}/policy`) {
       if (request.method === 'POST') {
         const { expectedRevision, ...changes } = body;
@@ -108,7 +113,7 @@ async function fixture(t: TestContext) {
     await writeFile(join(bin, executable), '#!/bin/sh\necho invoked >> "$CLQN_TEST_EXECUTIONS"\nexit 91\n', {
       mode: 0o700,
     });
-  const call = (args: string[], options: { savedLogin?: boolean; input?: string } = {}) => {
+  const call = (args: string[], options: { savedLogin?: boolean; input?: string; profile?: string } = {}) => {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       CLQN_CONFIG_DIR: join(directory, 'config'),
@@ -118,6 +123,8 @@ async function fixture(t: TestContext) {
       CLQN_TEST_EXECUTIONS: executions,
     };
     if (options.savedLogin) delete env.CLQN_TOKEN;
+    if (options.profile) env.CLQN_AGENT_PROFILE = options.profile;
+    else delete env.CLQN_AGENT_PROFILE;
     const result = run(process.execPath, [...sourceNodeArgs, cli, '--api-url', apiUrl, ...args], {
       env,
       cwd: directory,
@@ -125,7 +132,7 @@ async function fixture(t: TestContext) {
     result.child.stdin?.end(options.input);
     return result;
   };
-  return { call, requests, directory, token, user, executions, task };
+  return { call, requests, directory, bin, token, agentToken, user, executions, task };
 }
 
 test('human output strips terminal control characters from API text, while JSON keeps it exact', async (t) => {
@@ -150,6 +157,62 @@ test('agent add registers workers and orchestrators with positional names', asyn
       { name: 'Coordinator', role: 'orchestrator' },
     ],
   );
+});
+
+test('agent setup saves a private profile and launches either runtime with a scoped connection', async (t) => {
+  const f = await fixture(t);
+  const added = await f.call(['agent', 'add', 'coordinator', '--orchestrator', '--runtime', 'codex', '--json']);
+  assert.deepEqual(JSON.parse(added.stdout), {
+    agent: { name: 'coordinator', alias: 'coordinator', role: 'orchestrator' },
+  });
+  assert.doesNotMatch(added.stdout + added.stderr, /clqn_[A-Za-z0-9_-]{43}/);
+  assert.doesNotMatch((await f.call(['agent', 'list'])).stdout, new RegExp(agentId));
+
+  const runtimeScript = [
+    '#!/bin/sh',
+    'if [ -n "$CLQN_TOKEN" ] || [ -n "$CLQN_CLAN_ID" ]; then exit 92; fi',
+    'printf "%s\n" "$CLQN_AGENT_PROFILE" "$PWD" "$@"',
+    '',
+  ].join('\n');
+  for (const runtime of ['codex', 'claude']) await writeFile(join(f.bin, runtime), runtimeScript, { mode: 0o700 });
+
+  const codex = await f.call(['agent', 'run', 'coordinator']);
+  const [profile, cwd, codexFlag, codexConfig, shellFlag, shellConfig] = codex.stdout.trim().split('\n');
+  assert.ok(profile);
+  assert.equal(cwd, await realpath(f.directory));
+  assert.equal(codexFlag, '-c');
+  assert.ok(codexConfig?.startsWith('mcp_servers.clqn={command='));
+  assert.ok(codexConfig?.includes(JSON.stringify(profile)));
+  assert.equal(shellFlag, '-c');
+  assert.equal(shellConfig, `shell_environment_policy.set.CLQN_AGENT_PROFILE=${JSON.stringify(profile)}`);
+  assert.doesNotMatch(codex.stdout + codex.stderr, /clqn_[A-Za-z0-9_-]{43}/);
+  assert.equal((await stat(profile)).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(await readFile(profile, 'utf8')).token, f.agentToken);
+
+  const claude = await f.call(['agent', 'run', 'coordinator', '--runtime', 'claude']);
+  const [, , claudeFlag, claudeConfig] = claude.stdout.trim().split('\n');
+  assert.equal(claudeFlag, '--mcp-config');
+  assert.ok(claudeConfig);
+  const { command, args } = JSON.parse(claudeConfig).mcpServers.clqn;
+  assert.equal(command, process.execPath);
+  assert.deepEqual(args.slice(1), ['mcp', '--profile', profile, '--path', await realpath(f.directory)]);
+  assert.doesNotMatch(claude.stdout + claude.stderr, /clqn_[A-Za-z0-9_-]{43}/);
+
+  const identity = JSON.parse((await f.call(['whoami', '--json'], { profile })).stdout);
+  assert.equal(identity.agentId, agentId);
+  assert.equal(f.requests.at(-1)?.authorization, `Bearer ${f.agentToken}`);
+  await assert.rejects(
+    f.call(['whoami'], { profile: join(f.directory, 'missing') }),
+    /saved agent connection is missing/,
+  );
+  await assert.rejects(f.call(['logout'], { profile }), /personal terminal/);
+});
+
+test('agent add exposes a credential only when explicitly requested for a custom runtime', async (t) => {
+  const f = await fixture(t);
+  const result = JSON.parse((await f.call(['agent', 'add', 'custom', '--show-token', '--json'])).stdout);
+  assert.equal(result.agent.id, agentId);
+  assert.equal(result.token, f.agentToken);
 });
 
 test('limits shows current settings or updates them directly', async (t) => {
@@ -262,6 +325,6 @@ test('main help hides mcp while explicit mcp help remains available', async (t) 
   const main = await f.call(['--help']);
   assert.doesNotMatch(main.stdout, /\bmcp\b|\bpolicy\b/);
   assert.match((await f.call(['mcp', '--help'])).stdout, /Start the local stdio MCP server/);
-  assert.doesNotMatch((await f.call(['agent', '--help'])).stdout, /status|connect/);
+  assert.doesNotMatch((await f.call(['agent', '--help'])).stdout, /^\s+(status|connect)(?:\s|$)/m);
   assert.equal(f.requests.length, 0);
 });

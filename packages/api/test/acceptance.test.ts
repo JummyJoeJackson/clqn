@@ -93,8 +93,8 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   const invitation = await run(aliceEnv, ['invite', bob.user.email]);
   assert.equal(invitation.code, undefined);
   assert.equal((await run(bobEnv, ['join'])).id, clan.id);
-  const codex = await run(aliceEnv, ['agent', 'add', 'Codex']);
-  const claude = await run(bobEnv, ['agent', 'add', 'claude']);
+  const codex = await run(aliceEnv, ['agent', 'add', 'Codex', '--show-token']);
+  const claude = await run(bobEnv, ['agent', 'add', 'claude', '--show-token']);
   assert.equal(claude.agent.alias, 'claude');
   assert.equal(codex.agent.ownerId, alice.user.id);
   assert.equal(claude.agent.ownerId, bob.user.id);
