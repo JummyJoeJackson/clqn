@@ -7,8 +7,6 @@ import {
   registerAgentSchema,
   repositorySlugSchema,
   resourceAliasSchema,
-  type UpdatePolicy,
-  updatePolicySchema,
   VERSION,
 } from '@clqn/shared';
 import { Command, Option } from 'commander';
@@ -264,50 +262,6 @@ const selectedClan = async (options: { clan?: string } = {}) => {
   if (config.clanId) return config.clanId;
   throw new Error('Select a clan with clqn use <name>. Run clqn clans to see your clans.');
 };
-const policyOutput = (value: Awaited<ReturnType<ClqnClient['policy']>>) =>
-  output(
-    value,
-    `Policy revision ${value.revision} for ${value.userId} in ${value.clanId}\n` +
-      `Token limit: ${value.tokenLimit ?? 'none'} (total input + output across your agents in this clan)\n` +
-      `Allowed models: ${value.allowedModels?.join(', ') ?? 'any'}\nLeader control: ${value.control}\n` +
-      'Allowed models are enforced when the orchestrator delegates to your agents; this does not grant execution access.',
-  );
-interface LimitOptions {
-  clan?: string;
-  tokens?: string;
-  models?: string[];
-  control?: string;
-}
-const configureLimits = (command: Command) =>
-  command
-    .option('--clan <id>', 'clan ID')
-    .option('--tokens <number>', 'total token cap; 0 requests no usage, none removes the cap')
-    .option('--models <ids...>', 'allowed model identifiers; any removes the restriction')
-    .option('--control <level>', 'manual, approve, or automatic');
-const setLimits = async (options: LimitOptions) => {
-  const changes: Record<string, unknown> = {};
-  const tokens = options.tokens;
-  if (tokens !== undefined) {
-    if (tokens !== 'none' && !/^\d+$/.test(tokens))
-      throw new Error('Token limit must be a nonnegative integer or none');
-    changes.tokenLimit = tokens === 'none' ? null : Number(tokens);
-  }
-  if (options.models !== undefined)
-    changes.allowedModels = options.models.length === 1 && options.models[0] === 'any' ? null : options.models;
-  if (options.control !== undefined) changes.control = options.control;
-  updatePolicySchema.parse({ ...changes, expectedRevision: 0 });
-  const api = await client();
-  const clanId = await selectedClan(options);
-  const current = await api.policy(clanId);
-  policyOutput(await api.updatePolicy(clanId, { ...changes, expectedRevision: current.revision } as UpdatePolicy));
-};
-configureLimits(program.command('limits').description('Show or change your agent limits')).action(
-  async (options: LimitOptions) => {
-    if ([options.tokens, options.models, options.control].some((value) => value !== undefined))
-      return setLimits(options);
-    policyOutput(await (await client()).policy(await selectedClan(options)));
-  },
-);
 const agent = program.command('agent').description('Register and list agents');
 const agentLabel = (entry: Agent) =>
   entry.alias && entry.name !== entry.alias ? `${entry.name} (${entry.alias})` : entry.name;

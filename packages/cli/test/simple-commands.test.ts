@@ -30,15 +30,6 @@ async function fixture(t: TestContext) {
   const agentToken = `clqn_${'a'.repeat(43)}`;
   const agentActor = { ...user, agentId, clanId };
   let registered: { id: string; name: string; role: string; alias?: string } | undefined;
-  let policy = {
-    clanId,
-    userId,
-    tokenLimit: null,
-    allowedModels: null,
-    control: 'manual',
-    revision: 3,
-    enforcement: 'models',
-  };
   const requests: {
     method: string | undefined;
     path: string | undefined;
@@ -65,12 +56,6 @@ async function fixture(t: TestContext) {
       response.end(JSON.stringify({ agent: registered, token: agentToken }));
     } else if (request.url === `/v1/clans/${clanId}/agents`) {
       response.end(JSON.stringify({ agents: registered ? [registered] : [] }));
-    } else if (request.url === `/v1/clans/${clanId}/policy`) {
-      if (request.method === 'POST') {
-        const { expectedRevision, ...changes } = body;
-        policy = { ...policy, ...changes, revision: expectedRevision + 1 };
-      }
-      response.end(JSON.stringify(policy));
     } else {
       response.writeHead(404);
       response.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Unknown route' } }));
@@ -169,39 +154,9 @@ test('agent add exposes a credential only when explicitly requested for a custom
   assert.equal(result.token, f.agentToken);
 });
 
-test('limits shows current settings or updates them directly', async (t) => {
+test('simple commands reject invalid names before HTTP access', async (t) => {
   const f = await fixture(t);
-  const initial = JSON.parse((await f.call(['limits', '--json'])).stdout);
-  assert.equal(initial.revision, 3);
-  assert.equal(initial.enforcement, 'models');
-  const updated = JSON.parse(
-    (await f.call(['limits', '--tokens', '100000', '--models', 'provider/model', '--control', 'approve', '--json']))
-      .stdout,
-  );
-  assert.equal(updated.tokenLimit, 100000);
-  assert.equal(updated.revision, 4);
-  assert.deepEqual(
-    f.requests.map((request) => request.method),
-    ['GET', 'GET', 'POST'],
-  );
-  assert.deepEqual(f.requests[2]?.body, {
-    tokenLimit: 100000,
-    allowedModels: ['provider/model'],
-    control: 'approve',
-    expectedRevision: 3,
-  });
-});
-
-test('simple commands reject invalid names and limit values before HTTP access', async (t) => {
-  const f = await fixture(t);
-  for (const args of [
-    ['agent', 'add', ' '],
-    ['limits', '--tokens', '-1'],
-    ['limits', '--tokens', '1.5'],
-    ['limits', '--tokens', 'NaN'],
-    ['limits', '--models', 'same', 'same'],
-    ['limits', '--control', 'full'],
-  ])
+  for (const args of [['agent', 'add', ' ']])
     await assert.rejects(f.call([...args, '--json']), (thrown) => {
       const error = thrown as ExecError;
       assert.equal(error.code, 1);
@@ -233,7 +188,9 @@ test('removed commands and flags fail before API or Git access', async (t) => {
     ['logout'],
     ['init', 'My project'],
     ['join', 'My project'],
-    ['limits', '--token-limit', '10'],
+    ['limits'],
+    ['limits', '--tokens', '10'],
+    ['limits', '--models', 'provider/model'],
   ])
     await assert.rejects(f.call(args), (thrown) => {
       const error = thrown as ExecError;
@@ -248,7 +205,7 @@ test('removed commands and flags fail before API or Git access', async (t) => {
 test('main help hides mcp while explicit mcp help remains available', async (t) => {
   const f = await fixture(t);
   const main = await f.call(['--help']);
-  assert.doesNotMatch(main.stdout, /\bmcp\b|\bpolicy\b/);
+  assert.doesNotMatch(main.stdout, /\bmcp\b|\bpolicy\b|\blimits\b/);
   assert.match((await f.call(['mcp', '--help'])).stdout, /Start the local stdio MCP server/);
   assert.doesNotMatch((await f.call(['agent', '--help'])).stdout, /^\s+(status|connect|run)(?:\s|$)/m);
   assert.equal(f.requests.length, 0);
