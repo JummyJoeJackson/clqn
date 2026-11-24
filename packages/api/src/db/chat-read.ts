@@ -182,6 +182,7 @@ export async function chatActivity(db: WorkspaceDb, clanId: string, userId: stri
     estimatedTokens: row.proposal!.estimatedTokens,
     model: row.proposal!.model ?? null,
     taskId: row.taskId,
+    workerId: row.workerId,
     status: runStatus(row),
     tokens: row.tokens,
   }));

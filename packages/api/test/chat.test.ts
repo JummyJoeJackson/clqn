@@ -131,6 +131,7 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
   assert.equal(active.usage.agents, 1);
   const run = active.runs[0]!;
   const winner = run.messageId === answer.id ? worker : secondWorker;
+  assert.equal(run.workerId, winner.agent.id);
   const otherWorker = winner === worker ? secondWorker : worker;
   assert.equal((await request(otherWorker.token, `/tasks/${run.taskId}/claim`, {})).status, 409);
   assert.equal((await request(winner.token, `/tasks/${run.taskId}/claim`, {})).status, 200);

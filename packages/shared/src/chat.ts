@@ -70,6 +70,8 @@ export const chatProposalSchema = z.object({
 });
 export const chatRunSchema = chatProposalSchema.extend({
   taskId: z.uuid(),
+  // The assigned worker agent, so its owner's clqn can start it. Older servers omit it.
+  workerId: z.uuid().optional(),
   status: z.enum(['queued', 'running', 'done', 'released']),
   tokens: tokenCount.nullable(),
 });
