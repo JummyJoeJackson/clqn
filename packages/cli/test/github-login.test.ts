@@ -9,7 +9,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import { sourceNodeArgs } from '../../../scripts/test-node.js';
-import { readConfig, readServer } from '../src/config.js';
+import { readConfig, readServer, writeConfig } from '../src/config.js';
+
+const interactive = `data:text/javascript,${encodeURIComponent("Object.defineProperty(process.stdin, 'isTTY', { value: true })")}`;
 
 test('GitHub CLI saves only clqn token, prints identity without credentials, uses POST polling', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'clqn-github-'));
@@ -143,7 +145,6 @@ test('first-time interactive init signs in and creates the clan without a separa
     await rm(dir, { recursive: true, force: true });
   });
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const interactive = `data:text/javascript,${encodeURIComponent("Object.defineProperty(process.stdin, 'isTTY', { value: true })")}`;
   const result = await promisify(execFile)(
     process.execPath,
     [
@@ -166,4 +167,75 @@ test('first-time interactive init signs in and creates the clan without a separa
   assert.match(result.stderr, /ABCD-EFGH/);
   assert.ok(!(result.stdout + result.stderr).includes(token));
   assert.deepEqual(requests, ['/auth/github/start', '/auth/github/poll', '/v1/clans']);
+});
+
+test('interactive join refreshes stale GitHub sign-in and keeps the refreshed credential', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'clqn-join-'));
+  const stale = `clqn_${'s'.repeat(43)}`;
+  const token = `clqn_${'f'.repeat(43)}`;
+  const user = { id: randomUUID(), email: 'verified@example.com' };
+  const clan = { id: randomUUID(), name: 'My project', createdBy: randomUUID(), createdAt: new Date().toISOString() };
+  const invitation = { clanId: clan.id, clanName: clan.name, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  const accepts: (string | undefined)[] = [];
+  const server = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    res.setHeader('content-type', 'application/json');
+    switch (req.url) {
+      case '/auth/github/start':
+        res.end(
+          JSON.stringify({
+            handle: 'h'.repeat(43),
+            userCode: 'ABCD-EFGH',
+            verificationUri: 'https://github.com/login/device',
+            expiresIn: 15,
+            interval: 5,
+          }),
+        );
+        break;
+      case '/auth/github/poll':
+        res.end(JSON.stringify({ status: 'complete', user, token }));
+        break;
+      case '/v1/me':
+        res.end(JSON.stringify(user));
+        break;
+      case '/v1/invitations':
+        res.end(JSON.stringify({ invitations: [invitation] }));
+        break;
+      case '/v1/invitations/accept':
+        assert.deepEqual(JSON.parse(raw), { clanId: clan.id });
+        accepts.push(req.headers.authorization);
+        if (req.headers.authorization === `Bearer ${stale}`) {
+          res.writeHead(403);
+          res.end(JSON.stringify({ error: { code: 'INVITATION_LOGIN_REQUIRED', message: 'Sign in again' } }));
+        } else {
+          assert.equal(req.headers.authorization, `Bearer ${token}`);
+          res.end(JSON.stringify(clan));
+        }
+        break;
+      default:
+        res.writeHead(404).end();
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const previous = process.env.CLQN_CONFIG_DIR;
+  process.env.CLQN_CONFIG_DIR = dir;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.CLQN_CONFIG_DIR;
+    else process.env.CLQN_CONFIG_DIR = previous;
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  await writeConfig(url, { token: stale });
+  const { stdout, stderr } = await promisify(execFile)(
+    process.execPath,
+    [...sourceNodeArgs, '--import', interactive, 'packages/cli/src/index.ts', 'join', '--api-url', url, '--json'],
+    { env: { ...process.env, CLQN_TOKEN: undefined }, timeout: 15000 },
+  );
+  assert.deepEqual(JSON.parse(stdout), clan);
+  assert.match(stderr, /ABCD-EFGH/);
+  assert.ok(!stdout.includes(token) && !stderr.includes(token));
+  assert.deepEqual(accepts, [`Bearer ${stale}`, `Bearer ${token}`]);
+  assert.deepEqual(await readConfig(url), { token, clanId: clan.id });
 });

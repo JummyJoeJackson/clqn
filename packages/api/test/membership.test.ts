@@ -33,7 +33,7 @@ test('PostgreSQL: leaders remove members or hand off leadership, members leave, 
   });
   await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
   const alice = await connection.provisionUser(`${randomUUID()}@example.com`);
-  const bob = await connection.provisionUser(`${randomUUID()}@example.com`);
+  let bob = await connection.provisionUser(`${randomUUID()}@example.com`);
   const carol = await connection.provisionUser(`${randomUUID()}@example.com`);
   userIds.push(alice.user.id, bob.user.id, carol.user.id);
   const app = createApp(connection.store, connection.db);
@@ -60,6 +60,20 @@ test('PostgreSQL: leaders remove members or hand off leadership, members leave, 
   const secondBobInvite = await invite(bob);
   assert.deepEqual(await (await pending(alice.token)).json(), { invitations: [] });
   assert.equal((await accept(carol.token)).status, 404);
+  await sql`update users set github_id = ${randomUUID()} where id = ${bob.user.id}`;
+  const stale = bob.token;
+  const loginRequired = await pending(stale);
+  assert.equal(loginRequired.status, 403);
+  assert.deepEqual(await loginRequired.json(), {
+    error: {
+      code: 'INVITATION_LOGIN_REQUIRED',
+      message: 'Sign in with GitHub again to verify your invitation email.',
+    },
+  });
+  assert.equal((await accept(stale)).status, 403);
+  // A new credential for the GitHub-backed account can discover and accept the invitation.
+  bob = await connection.provisionUser(bob.user.email);
+  assert.deepEqual(await (await me(bob.token)).json(), bob.user);
   assert.deepEqual(await (await pending(bob.token)).json(), {
     invitations: [{ clanId: clan.id, clanName: clan.name, expiresAt: secondBobInvite.expiresAt }],
   });

@@ -9,6 +9,8 @@ import { limitReached, limits } from '../lib/limits.js';
 import * as schema from './schema.js';
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
+// Code-free invitations for GitHub accounts require a login as recent as the invitation.
+export type AuthenticatedActor = Actor & { githubCredentialIssuedAt?: Date };
 export type Member = { userId: string; email: string; role: 'leader' | 'member'; createdAt: string };
 export interface WorkspaceStore {
   createInvitation(
@@ -16,8 +18,8 @@ export interface WorkspaceStore {
     clanId: string,
     email: string,
   ): Promise<{ code: string; clanId: string; email: string; expiresAt: string } | undefined>;
-  listInvitations(actor: Actor, page: PageQuery): Promise<PendingInvitation[]>;
-  joinInvitation(actor: Actor, reference: string | { clanId: string }): Promise<Clan | undefined>;
+  listInvitations(actor: AuthenticatedActor, page: PageQuery): Promise<PendingInvitation[]>;
+  joinInvitation(actor: AuthenticatedActor, reference: string | { clanId: string }): Promise<Clan | undefined>;
   registerAgent(
     actor: Actor,
     clanId: string,
@@ -35,7 +37,7 @@ export interface WorkspaceStore {
   revokeToken(tokenHash: string): Promise<boolean>;
   listAgents(actor: Actor, clanId: string, page?: PageQuery): Promise<(Agent & { active: boolean })[]>;
   agentStatus(actor: Actor): Promise<Agent | undefined>;
-  authenticate(tokenHash: string): Promise<Actor | undefined>;
+  authenticate(tokenHash: string): Promise<AuthenticatedActor | undefined>;
   createClan(userId: string, name: string): Promise<Clan>;
   listClans(userId: string, page?: PageQuery, clanId?: string): Promise<Clan[]>;
   members(userId: string, clanId: string, page?: PageQuery): Promise<Member[] | undefined>;
@@ -49,6 +51,11 @@ const pendingFor = (email: string) =>
     isNull(schema.invitations.consumedAt),
     gt(schema.invitations.expiresAt, query`now()`),
   );
+
+function requireFreshInvitationLogin(actor: AuthenticatedActor, invitedAt: Date): void {
+  if (actor.githubCredentialIssuedAt && actor.githubCredentialIssuedAt < invitedAt)
+    throw new ApiError(403, 'INVITATION_LOGIN_REQUIRED', 'Sign in with GitHub again to verify your invitation email.');
+}
 
 export function createStore(url: string, poolSize = 10) {
   const sql = postgres(url, { max: poolSize });
@@ -67,6 +74,8 @@ export function createStore(url: string, poolSize = 10) {
         .select({
           id: schema.users.id,
           email: schema.users.email,
+          githubId: schema.users.githubId,
+          credentialCreatedAt: schema.credentials.createdAt,
           agentId: schema.credentials.agentId,
           clanId: schema.agents.clanId,
         })
@@ -75,7 +84,12 @@ export function createStore(url: string, poolSize = 10) {
         .leftJoin(schema.agents, eq(schema.credentials.agentId, schema.agents.id))
         .where(eq(schema.credentials.tokenHash, tokenHash));
       if (!result) return undefined;
-      if (!result.agentId) return { id: result.id, email: result.email };
+      if (!result.agentId)
+        return {
+          id: result.id,
+          email: result.email,
+          ...(result.githubId ? { githubCredentialIssuedAt: result.credentialCreatedAt } : {}),
+        };
       if (!result.clanId) return undefined;
       const actor = { id: result.id, email: result.email, agentId: result.agentId, clanId: result.clanId };
       try {
@@ -267,6 +281,7 @@ export function createStore(url: string, poolSize = 10) {
         .selectDistinctOn([schema.invitations.clanId], {
           clanId: schema.invitations.clanId,
           clanName: schema.clans.name,
+          createdAt: schema.invitations.createdAt,
           expiresAt: schema.invitations.expiresAt,
         })
         .from(schema.invitations)
@@ -282,18 +297,30 @@ export function createStore(url: string, poolSize = 10) {
             page.after ? gt(schema.invitations.clanId, page.after) : undefined,
           ),
         )
-        .orderBy(schema.invitations.clanId, desc(schema.invitations.expiresAt))
+        .orderBy(schema.invitations.clanId, desc(schema.invitations.createdAt), schema.invitations.id)
         .limit(page.limit + 1);
-      return invitations.map((invitation) => ({ ...invitation, expiresAt: invitation.expiresAt.toISOString() }));
+      return invitations.map(({ clanId, clanName, createdAt, expiresAt }) => {
+        requireFreshInvitationLogin(actor, createdAt);
+        return { clanId, clanName, expiresAt: expiresAt.toISOString() };
+      });
     },
     async joinInvitation(actor, reference) {
       requirePersonal(actor);
+      const codeFree = typeof reference !== 'string';
       return db.transaction(async (tx) => {
-        // Accepting by clan consumes every pending invitation for it, so no duplicate outlives the membership.
         const match =
           typeof reference === 'string'
             ? eq(schema.invitations.codeHash, hashToken(reference))
             : eq(schema.invitations.clanId, reference.clanId);
+        const [candidate] = await tx
+          .select({ createdAt: schema.invitations.createdAt })
+          .from(schema.invitations)
+          .where(and(match, pendingFor(actor.email)))
+          .orderBy(desc(schema.invitations.createdAt))
+          .limit(1);
+        if (!candidate) return undefined;
+        if (codeFree) requireFreshInvitationLogin(actor, candidate.createdAt);
+        // Accepting by clan consumes every pending invitation for it, so no duplicate outlives the membership.
         const [invitation] = await tx
           .update(schema.invitations)
           .set({ consumedAt: query`now()` })

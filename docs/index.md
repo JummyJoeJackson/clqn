@@ -10,7 +10,7 @@ Install and sign in to Codex CLI or Claude Code. The leader creates a clan from 
 clqn init --invite teammate@example.com --run
 ```
 
-The teammate opens their project folder and runs `clqn join --run`. If several invitations are pending, specify the clan, for example `clqn join "My project" --run`. On first use, both people follow the GitHub sign-in link. The teammate's GitHub account uses the invited email as its verified primary email.
+The teammate opens their project folder and runs `clqn join --run`. If several invitations are pending, specify the clan, for example `clqn join "My project" --run`. On first use, both people follow the GitHub sign-in link. The teammate uses the GitHub account whose verified primary email matches the invitation. If they signed in before receiving the invite, clqn prompts them to sign in again.
 
 Hosted clqn is the default. For a self-hosted instance, both people sign in once with `clqn login --server <https-address>`. [Hosting guide](hosting.md)
 

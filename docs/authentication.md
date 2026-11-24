@@ -43,7 +43,7 @@ clqn join "My project"   # Accept a specific invitation
 clqn join --list         # See pending invitations
 ```
 
-With GitHub sign-in, use the account whose verified primary email matches the invitation. For older CLI releases, the leader can run `clqn invite bob@example.com --code` and share the one-time code privately. The older CLI accepts it with `clqn join <invite-code>`.
+With GitHub sign-in, use the account whose verified primary email matches the invitation. If the invitation arrived after you signed in, clqn asks you to verify your email again through GitHub before you can see or accept it. For older CLI releases, the leader can run `clqn invite bob@example.com --code` and share the one-time code privately. The older CLI accepts it with `clqn join <invite-code>`.
 
 ## Remove a member or leave
 
