@@ -99,6 +99,13 @@
       "when": 1795491150252,
       "tag": "0013_close_stale_invitations",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1795494315002,
+      "tag": "0014_brief_wrecker",
+      "breakpoints": true
     }
   ]
 }

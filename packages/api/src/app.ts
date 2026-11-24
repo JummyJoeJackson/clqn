@@ -7,6 +7,7 @@ import { requirePersonal } from './lib/access.js';
 import { createRateLimiter } from './lib/rate-limit.js';
 import { createActivityRoutes } from './routes/activity.js';
 import { createAgentRoutes } from './routes/agents.js';
+import { createChatRoutes } from './routes/chat.js';
 import { createClanRoutes } from './routes/clans.js';
 import { createContextRoutes } from './routes/context.js';
 import { createGithubLoginRoutes } from './routes/github-login.js';
@@ -81,6 +82,7 @@ export function createApp(
     app.route('/v1', createAgentRoutes(store));
   }
   if (db) {
+    app.route('/v1/clans/:clanId/chat', createChatRoutes(db));
     app.route('/v1/clans/:clanId/repositories', createRepositoryRoutes(db, options.githubWebhookSecret));
     app.route('/v1/clans/:clanId/policy', createPolicyRoutes(db));
     app.route('/v1/clans/:clanId/context', createContextRoutes(db));

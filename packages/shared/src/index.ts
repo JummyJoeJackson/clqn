@@ -25,6 +25,22 @@ import {
 } from './agents.js';
 import { setAliasSchema } from './aliases.js';
 import {
+  type ChatDecision,
+  type ChatSettings,
+  type ChatUsage,
+  chatDecisionSchema,
+  chatHistorySchema,
+  chatInboxSchema,
+  chatInfoSchema,
+  chatMessageSchema,
+  chatMessageStatusSchema,
+  chatSettingsSchema,
+  chatStateSchema,
+  chatUsageSchema,
+  type SendChat,
+  sendChatSchema,
+} from './chat.js';
+import {
   contextEntrySchema,
   contextHistorySchema,
   contextKeySchema,
@@ -47,6 +63,7 @@ import {
 export * from './activity.js';
 export * from './agents.js';
 export * from './aliases.js';
+export * from './chat.js';
 export * from './context.js';
 export * from './pagination.js';
 export * from './tasks.js';
@@ -203,6 +220,54 @@ export class ClqnClient {
       if (after) seen.add(after);
     } while (after);
     return pages;
+  }
+  private chatPath(clanId: string) {
+    return `/v1/clans/${encodeURIComponent(clanId)}/chat`;
+  }
+  chatInfo(clanId: string, signal?: AbortSignal) {
+    return this.request(this.chatPath(clanId), chatInfoSchema, undefined, signal);
+  }
+  joinChat(clanId: string, settings: ChatSettings, signal?: AbortSignal) {
+    return this.request(
+      `${this.chatPath(clanId)}/join`,
+      chatSettingsSchema,
+      chatSettingsSchema.parse(settings),
+      signal,
+    );
+  }
+  chatState(clanId: string, signal?: AbortSignal) {
+    return this.request(`${this.chatPath(clanId)}/state`, chatStateSchema, undefined, signal);
+  }
+  chatHistory(clanId: string, before: number, signal?: AbortSignal) {
+    return this.request(`${this.chatPath(clanId)}/history?before=${before}`, chatHistorySchema, undefined, signal);
+  }
+  sendChat(clanId: string, message: SendChat, signal?: AbortSignal) {
+    return this.request(`${this.chatPath(clanId)}/messages`, chatMessageSchema, sendChatSchema.parse(message), signal);
+  }
+  chatInbox(clanId: string) {
+    return this.request(`${this.chatPath(clanId)}/inbox`, chatInboxSchema);
+  }
+  decideChat(clanId: string, id: string, decision: ChatDecision) {
+    return this.request(
+      `${this.chatPath(clanId)}/messages/${encodeURIComponent(id)}/decision`,
+      z.object({ status: chatMessageStatusSchema, blocker: z.string().nullable() }),
+      chatDecisionSchema.parse(decision),
+    );
+  }
+  approveChat(clanId: string, id: string, approve: boolean, signal?: AbortSignal) {
+    return this.request(
+      `${this.chatPath(clanId)}/messages/${encodeURIComponent(id)}/approval`,
+      z.object({ ok: z.literal(true) }),
+      { approve },
+      signal,
+    );
+  }
+  reportChatUsage(clanId: string, taskId: string, usage: ChatUsage) {
+    return this.request(
+      `${this.chatPath(clanId)}/tasks/${encodeURIComponent(taskId)}/usage`,
+      z.object({ ok: z.literal(true) }),
+      chatUsageSchema.parse(usage),
+    );
   }
   private requireSecureLogin() {
     if (this.baseUrl.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(this.baseUrl.hostname)) {
