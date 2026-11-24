@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { ClqnClient } from '@clqn/shared';
 import { serve } from '@hono/node-server';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
@@ -166,36 +167,33 @@ test('PostgreSQL: identity, clan isolation, concurrent creation, and credential 
     await new Promise((resolve) => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
   });
-  const env: NodeJS.ProcessEnv = { ...process.env, CLQN_CONFIG_DIR: directory };
-  delete env.CLQN_TOKEN;
-  const runCli = (args: string[], input?: string) => {
+  const apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const runCli = (args: string[], token: string) => {
     const command = promisify(execFile)(
       process.execPath,
       [
         ...sourceNodeArgs,
         fileURLToPath(new URL('../../cli/src/index.ts', import.meta.url)),
         '--api-url',
-        `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        apiUrl,
         '--json',
         ...args,
       ],
-      { env },
+      { env: { ...process.env, CLQN_CONFIG_DIR: directory, CLQN_TOKEN: token } },
     );
-    command.child.stdin?.end(input);
     return command.then(({ stdout }) => JSON.parse(stdout));
   };
-  assert.deepEqual(await runCli(['login'], alice.token), alice.user);
-  const cliClan = await runCli(['init', 'CLI project']);
+  assert.deepEqual(await runCli(['whoami'], alice.token), alice.user);
+  const cliClan = await new ClqnClient(apiUrl, alice.token).createClan('CLI project');
   assert.equal(cliClan.createdBy, alice.user.id);
-  assert.equal((await runCli(['members'])).members[0].role, 'leader');
-  const cliInvite = await runCli(['invite', bob.user.email]);
+  assert.equal((await runCli(['use', 'CLI project'], alice.token)).id, cliClan.id);
+  assert.equal((await runCli(['members'], alice.token)).members[0].role, 'leader');
+  const cliInvite = await runCli(['invite', bob.user.email], alice.token);
   assert.equal(cliInvite.code, undefined);
-  // Logout revokes the saved token on the server, not just the local copy.
-  assert.equal((await runCli(['logout'])).tokenRevoked, true);
-  await runCli(['login'], bob.token);
-  assert.equal((await runCli(['join', 'CLI project'])).id, cliClan.id);
-  assert.equal((await runCli(['members'])).members.length, 2);
-  assert.equal((await runCli(['logout'])).credentialsRemoved, true);
+  // Signing out revokes the token on the server, not just the local copy.
+  assert.equal((await new ClqnClient(apiUrl, alice.token).logout()).revoked, true);
+  await new ClqnClient(apiUrl, bob.token).acceptInvitation(cliClan.id);
+  assert.equal((await runCli(['members'], bob.token)).members.length, 2);
   assert.equal(await connection.revokeCredential(alice.credentialId), false);
   const denied = await app.request('/v1/me', { headers: auth(alice.token) });
   assert.equal(denied.status, 401);

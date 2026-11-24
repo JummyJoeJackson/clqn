@@ -80,8 +80,8 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   const printProfile = '#!/bin/sh\nprintf "%s\n" "$CLQN_AGENT_PROFILE"\n';
   for (const runtime of ['codex', 'claude']) await writeFile(join(bin, runtime), printProfile, { mode: 0o700 });
   baseEnv.PATH = [bin, baseEnv.PATH].filter(Boolean).join(delimiter);
-  const aliceEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'alice') };
-  const bobEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'bob') };
+  const aliceEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'alice'), CLQN_TOKEN: alice.token };
+  const bobEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'bob'), CLQN_TOKEN: bob.token };
   const runRaw = async (env: Record<string, string>, args: string[], input?: string, json = true) => {
     const command = promisify(execFile)(
       process.execPath,
@@ -93,18 +93,17 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   };
   const run = async (env: Record<string, string>, args: string[], input?: string) =>
     JSON.parse(await runRaw(env, args, input));
-  await run(aliceEnv, ['login'], alice.token);
-  await run(bobEnv, ['login'], bob.token);
-  const created = await runRaw(aliceEnv, ['init', '--invite', bob.user.email, '--run'], undefined, false);
-  const { clans } = await run(aliceEnv, ['clans']);
-  assert.equal(clans.length, 1);
-  const clan = clans[0];
+  // Clan setup happens in the interactive clqn prompt, so create and join through the API here.
+  const clan = await new ClqnClient(apiUrl, alice.token).createClan(basename(directory));
   clanIds.push(clan.id);
-  assert.equal(clan.name, basename(directory));
-  assert.match(created, /Invited /);
-  const joined = await runRaw(bobEnv, ['join', clan.name, '--run', 'claude'], undefined, false);
-  assert.match(joined, /Joined and selected /);
-  assert.doesNotMatch(created + joined, /clqn_(inv_)?[A-Za-z0-9_-]{43}/);
+  await run(aliceEnv, ['use', clan.name]);
+  assert.doesNotMatch(await runRaw(aliceEnv, ['invite', bob.user.email], undefined, false), /clqn_inv_/);
+  await new ClqnClient(apiUrl, bob.token).acceptInvitation(clan.id);
+  await run(bobEnv, ['use', clan.name]);
+  assert.equal((await run(aliceEnv, ['clans'])).clans.length, 1);
+  const created = await runRaw(aliceEnv, ['agent', 'run', '--runtime', 'codex'], undefined, false);
+  const joined = await runRaw(bobEnv, ['agent', 'run', '--runtime', 'claude'], undefined, false);
+  assert.doesNotMatch(created + joined, /clqn_[A-Za-z0-9_-]{43}/);
   const codexProfile = created.trim().split('\n').at(-1)!;
   const claudeProfile = joined.trim().split('\n').at(-1)!;
   assert.equal((await runRaw(aliceEnv, ['agent', 'run'], undefined, false)).trim(), codexProfile);
@@ -118,10 +117,10 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   assert.equal(claude.agent.ownerId, bob.user.id);
   assert.equal((await run(bobEnv, ['agent', 'list'])).agents.length, 2);
   // An agent's scope wins over an unrelated clan saved by its human owner.
-  const otherEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'other-human-clan') };
-  await run(otherEnv, ['login'], alice.token);
-  const otherClan = await run(otherEnv, ['init', 'Unrelated personal selection']);
+  const otherEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'other-human-clan'), CLQN_TOKEN: alice.token };
+  const otherClan = await new ClqnClient(apiUrl, alice.token).createClan('Unrelated personal selection');
   clanIds.push(otherClan.id);
+  await run(otherEnv, ['use', otherClan.name]);
   const scopedCodexEnv: Record<string, string> = { ...otherEnv, CLQN_TOKEN: codexToken };
   assert.equal(scopedCodexEnv.CLQN_CLAN_ID, undefined);
   const scopedMembers = await run(scopedCodexEnv, ['members']);
