@@ -297,7 +297,7 @@ export function chatFrame(view: View): Frame {
     pending ? (view.approvalFocused ? '↑↓ Choose  Y Approve  N Decline  Esc Back' : 'Ctrl+P Approvals') : '',
     question ? 'Ctrl+Q Reply' : '',
     'Ctrl+G Metrics',
-    view.messages.length > 3 || view.hasOlder ? 'PgUp History' : '',
+    view.messages.length > 3 || view.hasOlder ? '↑↓ PgUp History' : '',
     'Ctrl+C Quit',
   ].filter(Boolean);
   lines.push(paint(clip(actions.join('  ·  '), content), 'muted'));

@@ -348,13 +348,15 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
       void flush();
     } else if (key.name === 'escape') {
       reply = undefined;
-    } else if (key.name === 'pageup' || key.name === 'pagedown') {
-      const increment = Math.max(1, rows() - 13);
+    } else if (['pageup', 'pagedown', 'up', 'down'].includes(key.name ?? '')) {
+      // Terminals send the mouse wheel as ↑/↓ in full-screen apps, so those scroll a line at a time.
+      const increment = key.name === 'up' || key.name === 'down' ? 1 : Math.max(1, rows() - 13);
+      const back = key.name === 'pageup' || key.name === 'up';
       const span = Math.max(2, transcriptColumns(columns()));
       const total = messages().reduce((sum, message) => sum + messageLines(message, span, actor.id).length, 0);
       const max = Math.max(0, total - 2);
-      scroll = Math.max(0, Math.min(max, scroll + (key.name === 'pageup' ? increment : -increment)));
-      if (key.name === 'pageup' && scroll >= Math.max(0, max - increment)) void olderPage();
+      scroll = Math.max(0, Math.min(max, scroll + (back ? increment : -increment)));
+      if (back && scroll >= Math.max(0, max - Math.max(increment, rows() - 13))) void olderPage();
     } else if (key.name === 'end' && scroll) {
       scroll = 0;
     } else if (key.name === 'return' && draft.trim()) {
@@ -435,7 +437,7 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
       process.off('SIGTERM', stop);
       stdin.setRawMode(wasRaw);
       stdin.pause();
-      stdout.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1049l');
+      stdout.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1007l\x1b[?1049l');
       resolve(result);
     };
     emitKeypressEvents(stdin);
@@ -445,7 +447,8 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
     stdout.on('resize', draw);
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
-    stdout.write('\x1b[?1049h\x1b[?2004h\x1b[2J');
+    // ?1007h asks xterm-style terminals to send the mouse wheel as ↑/↓ on this screen.
+    stdout.write('\x1b[?1049h\x1b[?2004h\x1b[?1007h\x1b[2J');
     stdin.resume();
     draw();
   });
