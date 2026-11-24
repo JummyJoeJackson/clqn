@@ -2,48 +2,22 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
 import { eventsSchema, statsSchema, statusSchema } from '@clqn/shared';
 import { sql as query } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
 import { createApp } from '../src/app.js';
-import { createStore } from '../src/db/store.js';
 import { tasks } from '../src/db/tasks.js';
 import { appendEvent } from '../src/lib/access.js';
+import { database, skip } from './postgres.js';
 
 test('PostgreSQL: clan activity, bounded cursor pagination, atomic audit, and commit-ordered polling', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
   timeout: 15_000,
 }, async (t) => {
-  const sql = postgres(process.env.TEST_DATABASE_URL!, { max: 2 });
-  const connection = createStore(process.env.TEST_DATABASE_URL!);
-  const userIds: string[] = [];
-  const clanIds: string[] = [];
-  t.after(async () => {
-    try {
-      if (clanIds.length) {
-        await sql`delete from tasks where clan_id in ${sql(clanIds)}`;
-        await sql`delete from events where clan_id in ${sql(clanIds)}`;
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from agents where clan_id in ${sql(clanIds)}`;
-        await sql`delete from memberships where clan_id in ${sql(clanIds)}`;
-        await sql`delete from clans where id in ${sql(clanIds)}`;
-      }
-      if (userIds.length) await sql`delete from users where id in ${sql(userIds)}`;
-    } finally {
-      await connection.close();
-      await sql.end();
-    }
-  });
-  await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
-  const alice = await connection.provisionUser(`${randomUUID()}@example.com`);
-  const bob = await connection.provisionUser(`${randomUUID()}@example.com`);
-  userIds.push(alice.user.id, bob.user.id);
+  const { sql, connection, user } = await database(t);
+  const alice = await user();
+  const bob = await user();
   const clan = await connection.store.createClan(alice.user.id, 'Activity');
   const other = await connection.store.createClan(bob.user.id, 'Other');
-  clanIds.push(clan.id, other.id);
   const app = createApp(connection.store, connection.db);
   const auth = (token: string) => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json' });
   const get = (suffix: string, token = alice.token) =>

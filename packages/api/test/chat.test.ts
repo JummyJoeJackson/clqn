@@ -1,47 +1,17 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { type ChatState, chatInboxSchema, chatStateSchema, defaultChatSettings, type SendChat } from '@clqn/shared';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
 import { createApp } from '../src/app.js';
-import { createStore } from '../src/db/store.js';
+import { database, skip } from './postgres.js';
 
 test('PostgreSQL: shared chat, held work, owner approvals, and competing delegations', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
 }, async (t) => {
-  const sql = postgres(process.env.TEST_DATABASE_URL!, { max: 2 });
-  const connection = createStore(process.env.TEST_DATABASE_URL!);
-  const users: string[] = [];
-  const clans: string[] = [];
-  t.after(async () => {
-    try {
-      if (clans.length) {
-        await sql`delete from chats where clan_id in ${sql(clans)}`;
-        await sql`delete from tasks where clan_id in ${sql(clans)}`;
-        await sql`delete from events where clan_id in ${sql(clans)}`;
-        await sql`delete from credentials where user_id in ${sql(users)}`;
-        await sql`delete from agents where clan_id in ${sql(clans)}`;
-        await sql`delete from memberships where clan_id in ${sql(clans)}`;
-        await sql`delete from clans where id in ${sql(clans)}`;
-      }
-      if (users.length) await sql`delete from users where id in ${sql(users)}`;
-    } finally {
-      await connection.close();
-      await sql.end();
-    }
-  });
-  await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
-  async function user(name: string) {
-    const person = await connection.provisionUser(`${name}-${randomUUID()}@example.com`);
-    users.push(person.user.id);
-    return person;
-  }
+  const { sql, connection, user: provision } = await database(t);
+  const user = (name: string) => provision(`${name}-${randomUUID()}@example.com`);
   const [host, member, outsider] = await Promise.all([user('host'), user('member'), user('outsider')]);
   const clan = await connection.store.createClan(host.user.id, 'Docs refresh');
-  clans.push(clan.id);
   await sql`insert into memberships (clan_id, user_id) values (${clan.id}, ${member.user.id})`;
   const coordinator = await connection.store.registerAgent(host.user, clan.id, 'Coordinator', 'orchestrator');
   const worker = await connection.store.registerAgent(member.user, clan.id, 'Docs worker');

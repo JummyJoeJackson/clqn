@@ -1,13 +1,8 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { createTaskSchema, repositoryReportSchema, taskSchema } from '@clqn/shared';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
 import { createApp } from '../src/app.js';
-import { createStore } from '../src/db/store.js';
+import { database, skip } from './postgres.js';
 
 const repository = { slug: 'example/project', baseSha: 'a'.repeat(40), branch: 'clqn/task-one' };
 
@@ -71,35 +66,13 @@ test('repository task contracts reject unsafe refs and incomplete repository rep
 });
 
 test('PostgreSQL: orchestrator delegates isolated repository work and integration gates task completion', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
 }, async (t) => {
-  const sql = postgres(process.env.TEST_DATABASE_URL!, { max: 5 });
-  const connection = createStore(process.env.TEST_DATABASE_URL!);
-  const userIds: string[] = [];
-  const clanIds: string[] = [];
-  t.after(async () => {
-    try {
-      if (clanIds.length) {
-        await sql`delete from events where clan_id in ${sql(clanIds)}`;
-        await sql`delete from tasks where clan_id in ${sql(clanIds)}`;
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from agents where clan_id in ${sql(clanIds)}`;
-        await sql`delete from memberships where clan_id in ${sql(clanIds)}`;
-        await sql`delete from clans where id in ${sql(clanIds)}`;
-      }
-      if (userIds.length) await sql`delete from users where id in ${sql(userIds)}`;
-    } finally {
-      await connection.close();
-      await sql.end();
-    }
-  });
-  await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
-  const alice = await connection.provisionUser(`${randomUUID()}@example.com`);
-  const bob = await connection.provisionUser(`${randomUUID()}@example.com`);
-  userIds.push(alice.user.id, bob.user.id);
+  const { sql, connection, user } = await database(t);
+  const alice = await user();
+  const bob = await user();
   const clan = await connection.store.createClan(alice.user.id, 'Repository work');
   const other = await connection.store.createClan(bob.user.id, 'Other repository work');
-  clanIds.push(clan.id, other.id);
   await sql`insert into memberships (clan_id, user_id) values (${clan.id}, ${bob.user.id})`;
   const orchestrator = await connection.store.registerAgent(alice.user, clan.id, 'Coordinator', 'orchestrator');
   const regular = await connection.store.registerAgent(alice.user, clan.id, 'Leader worker');

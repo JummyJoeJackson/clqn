@@ -1,47 +1,17 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { type Actor, ApiError, tasksSchema } from '@clqn/shared';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { Hono } from 'hono';
-import postgres from 'postgres';
-import { createStore } from '../src/db/store.js';
 import { createTaskRoutes } from '../src/routes/tasks.js';
+import { database, skip } from './postgres.js';
 
 test('PostgreSQL: task lists filter by status and caller and page with a stable cursor', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
 }, async (t) => {
-  const sql = postgres(process.env.TEST_DATABASE_URL!, { max: 5 });
-  const db = drizzle(sql);
-  const connection = createStore(process.env.TEST_DATABASE_URL!);
-  const userIds: string[] = [];
-  const clanIds: string[] = [];
-  t.after(async () => {
-    try {
-      if (clanIds.length) {
-        await sql`delete from events where clan_id in ${sql(clanIds)}`;
-        await sql`delete from tasks where clan_id in ${sql(clanIds)}`;
-        await sql`delete from agents where clan_id in ${sql(clanIds)}`;
-        await sql`delete from memberships where clan_id in ${sql(clanIds)}`;
-        await sql`delete from clans where id in ${sql(clanIds)}`;
-      }
-      if (userIds.length) {
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from users where id in ${sql(userIds)}`;
-      }
-    } finally {
-      await connection.close();
-      await sql.end();
-    }
-  });
-  await migrate(db, { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
-  const alice = await connection.provisionUser(`${randomUUID()}@example.com`);
-  userIds.push(alice.user.id);
+  const { sql, db, connection, user } = await database(t);
+  const alice = await user();
   const clan = await connection.store.createClan(alice.user.id, 'Task list test');
   const other = await connection.store.createClan(alice.user.id, 'Other task list test');
-  clanIds.push(clan.id, other.id);
   const [agent] =
     await sql`insert into agents (clan_id, owner_id, name) values (${clan.id}, ${alice.user.id}, 'one') returning id`;
   assert.ok(agent);

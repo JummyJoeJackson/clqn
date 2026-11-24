@@ -1,41 +1,17 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
 import { createApp } from '../src/app.js';
-import { createStore, hashToken } from '../src/db/store.js';
+import { hashToken } from '../src/db/store.js';
+import { database, skip } from './postgres.js';
 
 test('PostgreSQL: leaders remove members or hand off leadership, members leave, and agent tokens never outlive membership', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
 }, async (t) => {
-  const url = process.env.TEST_DATABASE_URL!;
-  const sql = postgres(url, { max: 2 });
-  const connection = createStore(url);
-  const userIds: string[] = [];
-  t.after(async () => {
-    try {
-      if (userIds.length) {
-        await sql`delete from events where actor_id in ${sql(userIds)}`;
-        await sql`delete from invitations where created_by in ${sql(userIds)}`;
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from agents where owner_id in ${sql(userIds)}`;
-        await sql`delete from memberships where user_id in ${sql(userIds)}`;
-        await sql`delete from clans where created_by in ${sql(userIds)}`;
-        await sql`delete from users where id in ${sql(userIds)}`;
-      }
-    } finally {
-      await connection.close();
-      await sql.end();
-    }
-  });
-  await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
-  const alice = await connection.provisionUser(`${randomUUID()}@example.com`);
-  let bob = await connection.provisionUser(`${randomUUID()}@example.com`);
-  const carol = await connection.provisionUser(`${randomUUID()}@example.com`);
-  userIds.push(alice.user.id, bob.user.id, carol.user.id);
+  const { sql, connection, user } = await database(t);
+  const alice = await user();
+  let bob = await user();
+  const carol = await user();
   const app = createApp(connection.store, connection.db);
   const post = (token: string, path: string, body: object = {}) =>
     app.request(path, {
@@ -72,7 +48,7 @@ test('PostgreSQL: leaders remove members or hand off leadership, members leave, 
   });
   assert.equal((await accept(stale)).status, 403);
   // A new credential for the GitHub-backed account can discover and accept the invitation.
-  bob = await connection.provisionUser(bob.user.email);
+  bob = await user(bob.user.email);
   assert.deepEqual(await (await me(bob.token)).json(), bob.user);
   assert.deepEqual(await (await pending(bob.token)).json(), {
     invitations: [{ clanId: clan.id, clanName: clan.name, expiresAt: secondBobInvite.expiresAt }],

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import {
   contextEntrySchema,
   contextHistorySchema,
@@ -9,11 +8,8 @@ import {
   contextListSchema,
   writeContextSchema,
 } from '@clqn/shared';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
 import { createApp } from '../src/app.js';
-import { createStore } from '../src/db/store.js';
+import { database, skip } from './postgres.js';
 
 test('context contracts require optimistic revisions and bound UTF-8 text', () => {
   assert.equal(writeContextSchema.safeParse({ text: 'hello', expectedRevision: 0 }).success, true);
@@ -31,36 +27,12 @@ test('context contracts require optimistic revisions and bound UTF-8 text', () =
 });
 
 test('PostgreSQL: context isolation, immutable revisions, and concurrent compare-and-set writes', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
 }, async (t) => {
-  const sql = postgres(process.env.TEST_DATABASE_URL!, { max: 2 });
-  const connection = createStore(process.env.TEST_DATABASE_URL!);
-  const userIds: string[] = [];
-  const clanIds: string[] = [];
-  t.after(async () => {
-    try {
-      if (clanIds.length) {
-        await sql`delete from context_revisions where clan_id in ${sql(clanIds)}`;
-        await sql`delete from context_entries where clan_id in ${sql(clanIds)}`;
-        await sql`delete from events where clan_id in ${sql(clanIds)}`;
-        await sql`delete from memberships where clan_id in ${sql(clanIds)}`;
-        await sql`delete from clans where id in ${sql(clanIds)}`;
-      }
-      if (userIds.length) {
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from users where id in ${sql(userIds)}`;
-      }
-    } finally {
-      await connection.close();
-      await sql.end();
-    }
-  });
-  await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
-  const alice = await connection.provisionUser(`${randomUUID()}@example.com`);
-  const bob = await connection.provisionUser(`${randomUUID()}@example.com`);
-  userIds.push(alice.user.id, bob.user.id);
+  const { sql, connection, user } = await database(t);
+  const alice = await user();
+  const bob = await user();
   const clan = await connection.store.createClan(alice.user.id, 'Context test');
-  clanIds.push(clan.id);
   const app = createApp(connection.store, connection.db);
   const key = encodeURIComponent('project/notes with spaces');
   const path = `/v1/clans/${clan.id}/context/${key}`;

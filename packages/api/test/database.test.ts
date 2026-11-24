@@ -1,53 +1,18 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
-import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
-import { ClqnClient } from '@clqn/shared';
-import { serve } from '@hono/node-server';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
-import { sourceNodeArgs } from '../../../scripts/test-node.js';
 import { createApp } from '../src/app.js';
-import { createStore, hashToken } from '../src/db/store.js';
+import { hashToken } from '../src/db/store.js';
+import { database, skip } from './postgres.js';
 
-// Use a dedicated database: migrations are applied, and only this test's users/clans are deleted.
 test('PostgreSQL: identity, clan isolation, concurrent creation, and credential revocation', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
 }, async (t) => {
-  const url = process.env.TEST_DATABASE_URL!;
-  const sql = postgres(url, { max: 2 });
-  const connection = createStore(url);
-  const userIds: string[] = [];
-  t.after(async () => {
-    try {
-      if (userIds.length) {
-        await sql`delete from events where actor_id in ${sql(userIds)}`;
-        await sql`delete from invitations where created_by in ${sql(userIds)}`;
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from agents where owner_id in ${sql(userIds)}`;
-        await sql`delete from memberships where user_id in ${sql(userIds)}`;
-        await sql`delete from clans where created_by in ${sql(userIds)}`;
-        await sql`delete from users where id in ${sql(userIds)}`;
-      }
-    } finally {
-      await connection.close();
-      await sql.end();
-    }
-  });
-  await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
+  const { sql, connection, user } = await database(t);
   const email = `${randomUUID()}@example.com`;
-  const alice = await connection.provisionUser(email);
-  userIds.push(alice.user.id);
-  const bob = await connection.provisionUser(`${randomUUID()}@example.com`);
-  userIds.push(bob.user.id);
-  const second = await connection.provisionUser(email);
+  const alice = await user(email);
+  const bob = await user();
+  const second = await user(email);
   assert.equal(second.user.id, alice.user.id);
   const [stored] = await sql`select token_hash from credentials where id = ${alice.credentialId}`;
   assert.equal(stored?.token_hash, hashToken(alice.token));
@@ -150,53 +115,6 @@ test('PostgreSQL: identity, clan isolation, concurrent creation, and credential 
     (await agentClans.json()).clans.map((c: { id: string }) => c.id),
     [one.id],
   );
-  assert.equal((await register(registration.token, one.id, 'Nested')).status, 403);
-  assert.equal((await invite(registration.token, one.id, bob.user.email)).status, 403);
-  assert.equal((await create(registration.token, 'Forbidden')).status, 403);
   assert.equal(await connection.revokeCredential(agentCredential?.id), true);
   assert.equal((await app.request('/v1/agent', { headers: auth(registration.token) })).status, 401);
-  const bobAgent = await (await register(bob.token, one.id, 'Claude')).json();
-  await sql`delete from memberships where clan_id = ${one.id} and user_id = ${bob.user.id}`;
-  assert.equal((await app.request('/v1/agent', { headers: auth(bobAgent.token) })).status, 401);
-  // Exercise the built CLI against a real HTTP server and migrated PostgreSQL.
-  const directory = await mkdtemp(join(tmpdir(), 'clqn-postgres-'));
-  const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
-    const listener = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 }, () => resolve(listener));
-  });
-  t.after(async () => {
-    await new Promise((resolve) => server.close(resolve));
-    await rm(directory, { recursive: true, force: true });
-  });
-  const apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const runCli = (args: string[], token: string) => {
-    const command = promisify(execFile)(
-      process.execPath,
-      [
-        ...sourceNodeArgs,
-        fileURLToPath(new URL('../../cli/src/index.ts', import.meta.url)),
-        '--api-url',
-        apiUrl,
-        '--json',
-        ...args,
-      ],
-      { env: { ...process.env, CLQN_CONFIG_DIR: directory, CLQN_TOKEN: token } },
-    );
-    return command.then(({ stdout }) => JSON.parse(stdout));
-  };
-  assert.deepEqual(await runCli(['whoami'], alice.token), alice.user);
-  const cliClan = await new ClqnClient(apiUrl, alice.token).createClan('CLI project');
-  assert.equal(cliClan.createdBy, alice.user.id);
-  assert.equal((await runCli(['use', 'CLI project'], alice.token)).id, cliClan.id);
-  assert.equal((await runCli(['members'], alice.token)).members[0].role, 'leader');
-  const cliInvite = await runCli(['invite', bob.user.email], alice.token);
-  assert.equal(cliInvite.code, undefined);
-  // Signing out revokes the token on the server, not just the local copy.
-  assert.equal((await new ClqnClient(apiUrl, alice.token).logout()).revoked, true);
-  await new ClqnClient(apiUrl, bob.token).acceptInvitation(cliClan.id);
-  assert.equal((await runCli(['members'], bob.token)).members.length, 2);
-  assert.equal(await connection.revokeCredential(alice.credentialId), false);
-  const denied = await app.request('/v1/me', { headers: auth(alice.token) });
-  assert.equal(denied.status, 401);
-  const allowed = await app.request('/v1/me', { headers: auth(second.token) });
-  assert.equal(allowed.status, 200);
 });

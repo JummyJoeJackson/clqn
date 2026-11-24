@@ -1,14 +1,10 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { ClqnClient } from '@clqn/shared';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
-import { createStore } from '../src/db/store.js';
+import { hashToken } from '../src/db/store.js';
 import type { WorkspaceDb } from '../src/lib/access.js';
 import { createGithubLoginRoutes, githubRequest, verifiedIdentity } from '../src/routes/github-login.js';
+import { database, skip } from './postgres.js';
 
 test('GitHub identity requires stable ID and verified primary email', () => {
   assert.deepEqual(
@@ -32,7 +28,6 @@ test('GitHub transport redacts upstream errors and refuses redirects', async () 
     }),
     { message: 'GitHub authentication unavailable' },
   );
-  assert.throws(() => new ClqnClient('http://example.com').startGithubLogin(), /HTTPS/);
 });
 test('GitHub routes disabled by default and reject invalid input', async () => {
   const disabled = createGithubLoginRoutes();
@@ -58,23 +53,14 @@ test('GitHub login limits starts per client, so one client cannot lock out other
   assert.equal((await start('192.0.2.2')).status, 503);
 });
 test('PostgreSQL: GitHub single use, concurrent completion, identity conflicts, throttling and revocation', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
 }, async (t) => {
-  const sql = postgres(process.env.TEST_DATABASE_URL!);
-  const connection = createStore(process.env.TEST_DATABASE_URL!);
-  const ids: string[] = [];
   const handles: string[] = [];
   t.after(async () => {
     for (const handle of handles)
       await sql`delete from github_logins where handle_hash = encode(sha256(${handle}::bytea), 'hex')`;
-    for (const id of ids) {
-      await sql`delete from credentials where user_id = ${id}`;
-      await sql`delete from users where id = ${id}`;
-    }
-    await connection.close();
-    await sql.end();
   });
-  await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
+  const { sql, connection, user, track } = await database(t);
   let email = `${randomUUID()}@example.com`;
   let githubId = Math.floor(Math.random() * 1e12) + 1;
   let polls = 0;
@@ -133,17 +119,11 @@ test('PostgreSQL: GitHub single use, concurrent completion, identity conflicts, 
   assert.equal(complete.status, 'complete');
   assert.equal(polls, 1);
   assert.equal((await post('/poll', { handle: first.handle })).status, 'expired');
-  ids.push(complete.user.id);
-  assert.equal(
-    (await connection.store.authenticate((await import('../src/db/store.js')).hashToken(complete.token)))?.id,
-    complete.user.id,
-  );
+  track(complete.user.id);
+  assert.equal((await connection.store.authenticate(hashToken(complete.token)))?.id, complete.user.id);
   const [credential] = await sql`select id from credentials where user_id = ${complete.user.id}`;
   await connection.revokeCredential(credential!.id);
-  assert.equal(
-    await connection.store.authenticate((await import('../src/db/store.js')).hashToken(complete.token)),
-    undefined,
-  );
+  assert.equal(await connection.store.authenticate(hashToken(complete.token)), undefined);
   const second = await start();
   const third = await start();
   await ready(second.handle);
@@ -158,8 +138,7 @@ test('PostgreSQL: GitHub single use, concurrent completion, identity conflicts, 
   await ready(changed.handle);
   assert.equal((await post('/poll', { handle: changed.handle })).status, 'account_conflict');
   // A different identity with a matching operator email must never gain that account.
-  const operator = await connection.provisionUser(email);
-  ids.push(operator.user.id);
+  await user(email);
   const other = createGithubLoginRoutes(connection.db, 'client', async (path) =>
     path === '/login/device/code'
       ? {
@@ -193,7 +172,7 @@ test('PostgreSQL: GitHub single use, concurrent completion, identity conflicts, 
   const created = await Promise.all(concurrent.map((attempt) => post('/poll', { handle: attempt.handle })));
   assert.equal(created[0].status, 'complete');
   assert.equal(created[0].user.id, created[1].user.id);
-  ids.push(created[0].user.id);
+  track(created[0].user.id);
   mode = 'access_denied';
   const denied = await start();
   await ready(denied.handle);

@@ -3,52 +3,24 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { ClqnClient } from '@clqn/shared';
 import { serve } from '@hono/node-server';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
 import { createApp } from '../src/app.js';
-import { createStore } from '../src/db/store.js';
+import { database, skip } from './postgres.js';
 
 test('PostgreSQL: resource lists page by default, preserve client results and enforce clan scope', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
 }, async (t) => {
-  const sql = postgres(process.env.TEST_DATABASE_URL!, { max: 2 });
-  const connection = createStore(process.env.TEST_DATABASE_URL!);
-  const userIds: string[] = [];
-  const clanIds: string[] = [];
-  t.after(async () => {
-    try {
-      if (clanIds.length) {
-        await sql`delete from linked_repositories where clan_id in ${sql(clanIds)}`;
-        await sql`delete from context_entries where clan_id in ${sql(clanIds)}`;
-        await sql`delete from events where clan_id in ${sql(clanIds)}`;
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from agents where clan_id in ${sql(clanIds)}`;
-        await sql`delete from memberships where clan_id in ${sql(clanIds)}`;
-        await sql`delete from clans where id in ${sql(clanIds)}`;
-        await sql`delete from users where id in ${sql(userIds)}`;
-      }
-    } finally {
-      await connection.close();
-      await sql.end();
-    }
-  });
-  await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
-  const alice = await connection.provisionUser(`${randomUUID()}@example.com`);
-  const bob = await connection.provisionUser(`${randomUUID()}@example.com`);
-  userIds.push(alice.user.id, bob.user.id);
+  const { sql, connection, user, track } = await database(t);
+  const alice = await user();
+  const bob = await user();
   const clan = await connection.store.createClan(alice.user.id, 'Page test');
   const other = await connection.store.createClan(bob.user.id, 'Other page test');
-  clanIds.push(clan.id, other.id);
   const worker = await connection.store.registerAgent(alice.user, clan.id, 'Worker');
   for (let n = 0; n < 100; n++) {
     const id = randomUUID();
     const extraClan = randomUUID();
-    userIds.push(id);
-    clanIds.push(extraClan);
+    track(id);
     await sql`insert into users (id, email) values (${id}, ${`${id}@example.com`})`;
     await sql`insert into memberships (clan_id, user_id) values (${clan.id}, ${id})`;
     await sql`insert into clans (id, name, created_by) values (${extraClan}, 'Another', ${alice.user.id})`;

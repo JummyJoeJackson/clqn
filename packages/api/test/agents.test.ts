@@ -22,9 +22,11 @@ test('agent credentials cannot administer clans or escape their registered clan'
       members: async () => [{ userId: alice.id, email: alice.email, role: 'leader', createdAt }],
     }),
   );
+  assert.equal((await app.request('/v1/invitations', { headers })).status, 403);
   for (const path of [
     '/v1/clans',
     '/v1/invitations/join',
+    '/v1/invitations/accept',
     `/v1/clans/${clanId}/agents`,
     `/v1/clans/${clanId}/invitations`,
   ]) {

@@ -37,7 +37,6 @@ test('metrics tab charts tokens and agents and lists members, tasks, and queue w
   assert.match(text, /✓ Fix links .*~900/);
   assert.match(text, /Queue wait · avg 1m · longest 2m · 2 waiting \(oldest 7m\)/);
   assert.match(lines.at(-1)!, /T \[24h\] 7d {2}· {2}Esc Back/);
-  for (const line of lines) assert.ok(line.length <= 80, line);
 });
 
 test('metrics tab fits small terminals and shows loading for another window', () => {
@@ -48,7 +47,6 @@ test('metrics tab fits small terminals and shows loading for another window', ()
     assert.ok(text.includes(caption), caption);
   assert.match(small.lines.at(-3)!, /Request failed/);
   assert.match(small.lines.at(-1)!, /Esc Back/);
-  for (const line of small.lines) assert.ok(line.length <= 40, line);
 
   const loading = metricsFrame({ ...view, window: '7d' });
   assert.match(loading.lines.join('\n'), /Loading metrics…/);

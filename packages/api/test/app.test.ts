@@ -27,12 +27,6 @@ test('readiness reports whether the database answers', async () => {
   assert.deepEqual(await failed.json(), { status: 'unavailable' });
 });
 
-test('workspace endpoints require credentials', async () => {
-  const response = await createApp().request('/v1/clans');
-  assert.equal(response.status, 401);
-  assert.equal(errorSchema.parse(await response.json()).error.code, 'UNAUTHORIZED');
-});
-
 const token = `clqn_${'a'.repeat(43)}`;
 const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
 const alice = { id: '65fd2b48-b47f-4862-a85d-af491cdb8a3c', email: 'alice@example.com' };
@@ -60,6 +54,7 @@ test('missing, malformed, and unknown credentials never reach workspace operatio
   for (const authorization of ['', 'Bearer raw-password', `Basic ${token}`, `Bearer ${token}`]) {
     const response = await app.request('/v1/clans', { headers: { authorization } });
     assert.equal(response.status, 401);
+    assert.equal(errorSchema.parse(await response.json()).error.code, 'UNAUTHORIZED');
     assert.equal(response.headers.get('cache-control'), 'no-store');
   }
   assert.equal(lookups, 1);
@@ -193,14 +188,4 @@ test('invitation routes validate bodies, forward verified identity, and hide ina
     (await app.request('/v1/invitations/join', { method: 'POST', headers, body: 'x'.repeat(5000) })).status,
     413,
   );
-});
-
-test('agent credentials cannot list or accept invitations', async () => {
-  const app = createApp(
-    stub({
-      authenticate: async () => ({ ...alice, agentId: alice.id, clanId: alice.id }),
-    }),
-  );
-  assert.equal((await app.request('/v1/invitations', { headers })).status, 403);
-  assert.equal((await app.request('/v1/invitations/accept', { method: 'POST', headers })).status, 403);
 });

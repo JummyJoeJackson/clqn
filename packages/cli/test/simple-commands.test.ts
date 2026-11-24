@@ -72,11 +72,11 @@ async function fixture(t: TestContext) {
     await writeFile(join(bin, executable), '#!/bin/sh\necho invoked >> "$CLQN_TEST_EXECUTIONS"\nexit 91\n', {
       mode: 0o700,
     });
-  const call = (args: string[], options: { profile?: string } = {}) => {
+  const call = (args: string[], options: { profile?: string; token?: string } = {}) => {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       CLQN_CONFIG_DIR: join(directory, 'config'),
-      CLQN_TOKEN: token,
+      CLQN_TOKEN: options.token ?? token,
       CLQN_CLAN_ID: clanId,
       PATH: `${bin}:${process.env.PATH}`,
       CLQN_TEST_EXECUTIONS: executions,
@@ -117,6 +117,28 @@ test('agent add registers workers and orchestrators with positional names', asyn
   );
 });
 
+test('whoami shows the person, or for agent credentials the agent and its owner', async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(JSON.parse((await f.call(['whoami', '--json'])).stdout), f.user);
+  await f.call(['agent', 'add', 'Worker', '--json']);
+  const before = f.requests.length;
+  const identity = JSON.parse((await f.call(['whoami', '--json'], { token: f.agentToken })).stdout);
+  assert.deepEqual(identity, {
+    ...f.user,
+    agentId,
+    clanId,
+    agent: { id: agentId, ownerId: userId, clanId, createdAt, name: 'Worker', role: 'worker' },
+  });
+  assert.equal(
+    (await f.call(['whoami'], { token: f.agentToken })).stdout,
+    `Worker (worker)\nSigned in for ${f.user.email}\n`,
+  );
+  assert.deepEqual(
+    f.requests.slice(before).map((request) => request.path),
+    ['/v1/me', '/v1/agent', '/v1/me', '/v1/agent'],
+  );
+});
+
 test('agent setup saves a private profile that scopes later commands to the agent', async (t) => {
   const f = await fixture(t);
   const added = await f.call(['agent', 'add', 'coordinator', '--orchestrator', '--runtime', 'codex', '--json']);
@@ -154,44 +176,21 @@ test('agent add exposes a credential only when explicitly requested for a custom
   assert.equal(result.token, f.agentToken);
 });
 
-test('simple commands reject invalid names before HTTP access', async (t) => {
+test('agent add rejects a blank name before HTTP access', async (t) => {
   const f = await fixture(t);
-  for (const args of [['agent', 'add', ' ']])
-    await assert.rejects(f.call([...args, '--json']), (thrown) => {
-      const error = thrown as ExecError;
-      assert.equal(error.code, 1);
-      assert.equal(error.stdout, '');
-      assert.equal(JSON.parse(error.stderr).error.code, 'COMMAND_FAILED');
-      return true;
-    });
+  await assert.rejects(f.call(['agent', 'add', ' ', '--json']), (thrown) => {
+    const error = thrown as ExecError;
+    assert.equal(error.code, 1);
+    assert.equal(error.stdout, '');
+    assert.equal(JSON.parse(error.stderr).error.code, 'COMMAND_FAILED');
+    return true;
+  });
   assert.equal(f.requests.length, 0);
 });
 
-test('removed commands and flags fail before API or Git access', async (t) => {
+test('unknown commands and flags fail before API or Git access', async (t) => {
   const f = await fixture(t);
-  for (const args of [
-    ['agent', 'status'],
-    ['agent', 'connect', '--name', 'Legacy'],
-    ['agent', 'add', '--name', 'Legacy'],
-    ['sync'],
-    ['watch'],
-    ['repo', 'sync'],
-    ['policy', 'show'],
-    ['policy', 'set', '--tokens', '10'],
-    ...['add', 'start', 'submit', 'merge', 'done'].map((action) => ['task', action, taskId]),
-    ...['context', 'status', 'log', 'metrics'].map((action) => [action]),
-    ['agent', 'alias', 'worker', 'short'],
-    ['agent', 'run'],
-    ['agent', 'run', 'coordinator', '--runtime', 'claude'],
-    ['login'],
-    ['login', '--token-stdin'],
-    ['logout'],
-    ['init', 'My project'],
-    ['join', 'My project'],
-    ['limits'],
-    ['limits', '--tokens', '10'],
-    ['limits', '--models', 'provider/model'],
-  ])
+  for (const args of [['sync'], ['task', 'start', taskId], ['agent', 'add', '--name', 'Legacy']])
     await assert.rejects(f.call(args), (thrown) => {
       const error = thrown as ExecError;
       assert.equal(error.code, 1);

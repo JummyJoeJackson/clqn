@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { ApiError, ClqnClient } from '@clqn/shared';
 import { sourceNodeArgs } from '../../../scripts/test-node.js';
 import { writeConfig } from '../src/config.js';
 
@@ -55,18 +57,9 @@ test('CLI returns nonzero and structured errors when the API fails', async (t) =
       return true;
     },
   );
-  await assert.rejects(new ClqnClient(url).health(), ApiError);
-});
-
-test('client rejects invalid server response contracts', async (t) => {
-  const url = await fixture(t, 200, { status: 'pretend' });
-  await assert.rejects(new ClqnClient(url).health());
 });
 
 async function workspaceFixture(t: TestContext) {
-  const { mkdtemp, rm } = await import('node:fs/promises');
-  const { tmpdir } = await import('node:os');
-  const { join } = await import('node:path');
   const directory = await mkdtemp(join(tmpdir(), 'clqn-cli-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const user = { id: 'e6bc7a0a-7291-435a-a7fc-a9d544233270', email: 'alice@example.com' };
@@ -214,12 +207,9 @@ test('CLI removes members and transfers leadership by email, and leaving clears 
   });
 });
 
-test('CLI rejects malformed invitation input before making an HTTP request', async (t) => {
+test('commands without a selected clan or with a malformed email fail before any HTTP request', async (t) => {
   const f = await workspaceFixture(t);
-  for (const args of [
-    ['invite', 'bob@example.com'],
-    ['invite', 'invalid-email', '--clan', f.clan.id],
-  ]) {
+  for (const args of [['members'], ['invite', 'bob@example.com'], ['invite', 'invalid-email', '--clan', f.clan.id]]) {
     await assert.rejects(f.call([...args, '--json']), (thrown) => {
       const error = thrown as ExecError;
       assert.equal(JSON.parse(error.stderr).error.code, 'COMMAND_FAILED');
@@ -230,8 +220,6 @@ test('CLI rejects malformed invitation input before making an HTTP request', asy
 });
 
 test('CLI saved credentials and clan selection are API-scoped private configuration', async (t) => {
-  const { readdir, readFile, stat } = await import('node:fs/promises');
-  const { join } = await import('node:path');
   const f = await workspaceFixture(t);
   await f.signIn();
   const filename = (await readdir(f.directory)).find((name) => name.endsWith('.json'));
@@ -278,19 +266,7 @@ test('environment token override works and another API receives no saved token',
   assert.equal(other.requests.at(-1)?.authorization, undefined);
 });
 
-test('members requires a selected clan', async (t) => {
-  const f = await workspaceFixture(t);
-  await assert.rejects(f.call(['members', '--json']), (thrown) => {
-    const error = thrown as ExecError;
-    assert.equal(JSON.parse(error.stderr).error.code, 'COMMAND_FAILED');
-    return true;
-  });
-  assert.equal(f.requests.length, 0);
-});
-
 test('commands use the saved server unless an override is given', async (t) => {
-  const { writeFile } = await import('node:fs/promises');
-  const { join } = await import('node:path');
   const f = await workspaceFixture(t);
   await f.signIn();
   await writeFile(join(f.directory, 'server'), `${f.url}\n`, { mode: 0o600 });

@@ -295,7 +295,7 @@ test('a member without Claude Code or Codex sees why agents are off', async (t) 
   assert.equal(f.spawned.length, 0);
 });
 
-test('runtime output yields total tokens and the final message', () => {
+test('runtime output yields total tokens, the final message, and why a run failed', () => {
   assert.deepEqual(
     agentOutput(
       'claude',
@@ -315,9 +315,6 @@ test('runtime output yields total tokens and the final message', () => {
     ),
     { tokens: 12 },
   );
-});
-
-test('runtime output reports why a run failed', () => {
   assert.equal(
     agentOutput(
       'codex',

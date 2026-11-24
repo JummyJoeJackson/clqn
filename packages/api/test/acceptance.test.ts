@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
@@ -14,58 +13,29 @@ import { ClqnClient } from '@clqn/shared';
 import { serve } from '@hono/node-server';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
 import { sourceNodeArgs } from '../../../scripts/test-node.js';
 import { createApp } from '../src/app.js';
-import { createStore } from '../src/db/store.js';
+import { database, skip } from './postgres.js';
 
 const cliPath = fileURLToPath(new URL('../../cli/src/index.ts', import.meta.url));
 
 type ActivityEvent = { type: string; sequence: number; agentId: string | null; resourceId: string | null };
 
 test('MVP acceptance: two people and two stdio agents share context, coordinate work, and observe progress', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
   timeout: 30_000,
 }, async (t) => {
-  const sql = postgres(process.env.TEST_DATABASE_URL!, { max: 5 });
-  const db = drizzle(sql);
-  const connection = createStore(process.env.TEST_DATABASE_URL!);
   const directory = await mkdtemp(join(tmpdir(), 'clqn-acceptance-'));
-  const userIds: string[] = [];
-  const clanIds: string[] = [];
   const clients: Client[] = [];
   let server: ReturnType<typeof serve> | undefined;
   t.after(async () => {
     await Promise.all(clients.map((client) => client.close()));
     if (server) await new Promise((resolve) => server?.close(resolve));
-    try {
-      if (clanIds.length) {
-        await sql`delete from events where clan_id in ${sql(clanIds)}`;
-        await sql`delete from context_revisions where clan_id in ${sql(clanIds)}`;
-        await sql`delete from context_entries where clan_id in ${sql(clanIds)}`;
-        await sql`delete from tasks where clan_id in ${sql(clanIds)}`;
-        await sql`delete from invitations where clan_id in ${sql(clanIds)}`;
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from agents where clan_id in ${sql(clanIds)}`;
-        await sql`delete from memberships where clan_id in ${sql(clanIds)}`;
-        await sql`delete from clans where id in ${sql(clanIds)}`;
-      }
-      if (userIds.length) {
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from users where id in ${sql(userIds)}`;
-      }
-    } finally {
-      await connection.close();
-      await sql.end();
-      await rm(directory, { recursive: true, force: true });
-    }
+    await rm(directory, { recursive: true, force: true });
   });
-  await migrate(db, { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
-  const alice = await connection.provisionUser(`${randomUUID()}@example.com`);
-  const bob = await connection.provisionUser(`${randomUUID()}@example.com`);
-  userIds.push(alice.user.id, bob.user.id);
+  const { db, connection, user } = await database(t);
+  const alice = await user();
+  const bob = await user();
   server = serve({ fetch: createApp(connection.store, db).fetch, hostname: '127.0.0.1', port: 0 });
   await once(server, 'listening');
   const apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -90,7 +60,6 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
     JSON.parse(await runRaw(env, args, input));
   // Clan setup happens in the interactive clqn prompt, so create and join through the API here.
   const clan = await new ClqnClient(apiUrl, alice.token).createClan(basename(directory));
-  clanIds.push(clan.id);
   await run(aliceEnv, ['use', clan.name]);
   assert.doesNotMatch(await runRaw(aliceEnv, ['invite', bob.user.email], undefined, false), /clqn_inv_/);
   await new ClqnClient(apiUrl, bob.token).acceptInvitation(clan.id);
@@ -118,12 +87,14 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   // An agent's scope wins over an unrelated clan saved by its human owner.
   const otherEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'other-human-clan'), CLQN_TOKEN: alice.token };
   const otherClan = await new ClqnClient(apiUrl, alice.token).createClan('Unrelated personal selection');
-  clanIds.push(otherClan.id);
   await run(otherEnv, ['use', otherClan.name]);
   const scopedCodexEnv: Record<string, string> = { ...otherEnv, CLQN_TOKEN: codexToken };
   assert.equal(scopedCodexEnv.CLQN_CLAN_ID, undefined);
   const scopedMembers = await run(scopedCodexEnv, ['members']);
-  assert.deepEqual(new Set(scopedMembers.members.map((member: { userId: string }) => member.userId)), new Set(userIds));
+  assert.deepEqual(
+    new Set(scopedMembers.members.map((member: { userId: string }) => member.userId)),
+    new Set([alice.user.id, bob.user.id]),
+  );
   const cleanAgentEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'agent-only'), CLQN_TOKEN: codexToken };
   assert.equal((await run(cleanAgentEnv, ['members'])).members.length, 2);
   const connectMcp = async (name: string, env: Record<string, string>) => {

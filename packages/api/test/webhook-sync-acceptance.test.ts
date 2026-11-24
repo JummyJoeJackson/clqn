@@ -11,27 +11,20 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { ClqnClient } from '@clqn/shared';
 import { serve } from '@hono/node-server';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
 import { sourceNodeArgs } from '../../../scripts/test-node.js';
 import type { MainSyncResult } from '../../cli/src/git.js';
 import { runMcpSync } from '../../cli/src/mcp-sync.js';
 import { createApp } from '../src/app.js';
-import { createStore } from '../src/db/store.js';
+import { database, skip } from './postgres.js';
 
 const execute = promisify(execFile);
 const cli = fileURLToPath(new URL('../../cli/src/index.ts', import.meta.url));
 
 test('webhook sync acceptance: main notifications trigger Git fetches while idle polls and task branches do not', {
-  skip: !process.env.TEST_DATABASE_URL && 'Set TEST_DATABASE_URL to run PostgreSQL integration tests',
+  skip,
   timeout: 45_000,
 }, async (t) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'clqn-webhook-sync-')));
-  const sql = postgres(process.env.TEST_DATABASE_URL!, { max: 5 });
-  const connection = createStore(process.env.TEST_DATABASE_URL!);
-  const userIds: string[] = [];
-  const clanIds: string[] = [];
   let server: ReturnType<typeof serve> | undefined;
   const controller = new AbortController();
   let syncing: Promise<void> | undefined;
@@ -39,27 +32,11 @@ test('webhook sync acceptance: main notifications trigger Git fetches while idle
     controller.abort();
     await syncing;
     if (server) await new Promise((resolve) => server?.close(resolve));
-    try {
-      if (clanIds.length) {
-        await sql`delete from github_deliveries where binding_id in (select id from linked_repositories where clan_id in ${sql(clanIds)})`;
-        await sql`delete from linked_repositories where clan_id in ${sql(clanIds)}`;
-        await sql`delete from events where clan_id in ${sql(clanIds)}`;
-        await sql`delete from credentials where user_id in ${sql(userIds)}`;
-        await sql`delete from memberships where clan_id in ${sql(clanIds)}`;
-        await sql`delete from clans where id in ${sql(clanIds)}`;
-      }
-      if (userIds.length) await sql`delete from users where id in ${sql(userIds)}`;
-    } finally {
-      await connection.close();
-      await sql.end();
-      await rm(root, { recursive: true, force: true });
-    }
+    await rm(root, { recursive: true, force: true });
   });
-  await migrate(drizzle(sql), { migrationsFolder: fileURLToPath(new URL('../drizzle', import.meta.url)) });
-  const leader = await connection.provisionUser(`${randomUUID()}@example.com`);
-  userIds.push(leader.user.id);
+  const { sql, connection, user } = await database(t);
+  const leader = await user();
   const clan = await connection.store.createClan(leader.user.id, 'Webhook sync acceptance');
-  clanIds.push(clan.id);
   const app = createApp(connection.store, connection.db, { githubWebhookSecret: 'test-webhook-master-'.repeat(4) });
   let eventReads = 0;
   server = serve({
