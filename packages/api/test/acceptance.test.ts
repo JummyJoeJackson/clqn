@@ -10,6 +10,7 @@ import type { Readable } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { ClqnClient } from '@clqn/shared';
 import { serve } from '@hono/node-server';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -95,7 +96,9 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   await run(aliceEnv, ['login'], alice.token);
   await run(bobEnv, ['login'], bob.token);
   const created = await runRaw(aliceEnv, ['init', '--invite', bob.user.email, '--run'], undefined, false);
-  const clan = (await run(aliceEnv, ['status'])).clan;
+  const { clans } = await run(aliceEnv, ['clans']);
+  assert.equal(clans.length, 1);
+  const clan = clans[0];
   clanIds.push(clan.id);
   assert.equal(clan.name, basename(directory));
   assert.match(created, /Invited /);
@@ -162,11 +165,13 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
     return JSON.parse(content?.[0]?.text ?? '');
   };
   assert.equal((await call(aliceMcp, 'clqn_get_status')).clan.id, clan.id);
-  const initial = await run(
-    codexEnv,
-    ['context', 'write', 'implementation', '--expected-revision', '0'],
-    'Alice: API work ready.',
-  );
+  const aliceApi = new ClqnClient(apiUrl, alice.token);
+  const bobApi = new ClqnClient(apiUrl, bob.token);
+  const initial = await call(aliceMcp, 'clqn_write_context', {
+    key: 'implementation',
+    text: 'Alice: API work ready.',
+    expectedRevision: 0,
+  });
   assert.equal(initial.revision, 1);
   assert.equal((await call(bobMcp, 'clqn_read_context', { key: 'implementation' })).text, 'Alice: API work ready.');
   await call(bobMcp, 'clqn_write_context', {
@@ -175,39 +180,32 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
     expectedRevision: 1,
   });
   assert.equal((await call(aliceMcp, 'clqn_read_context', { key: 'implementation' })).revision, 2);
-  assert.equal((await run(codexEnv, ['context', 'read', 'implementation'])).text, 'Bob: CLI work ready too.');
-  assert.equal((await run(claudeEnv, ['context', 'history', 'implementation'])).revisions.length, 2);
+  assert.equal((await call(aliceMcp, 'clqn_read_context', { key: 'implementation' })).text, 'Bob: CLI work ready too.');
+  assert.equal((await call(bobMcp, 'clqn_context_history', { key: 'implementation' })).revisions.length, 2);
   assert.equal((await call(aliceMcp, 'clqn_list_context')).entries.length, 1);
   const task = await call(aliceMcp, 'clqn_create_task', {
     description: 'Review shared implementation',
     alias: 'review',
   });
-  assert.equal(
-    (await run(aliceEnv, ['task', 'assign', 'review', '--agent', claude.agent.alias])).assignedAgentId,
-    claude.agent.id,
-  );
+  assert.equal((await aliceApi.assignTask(clan.id, 'review', claude.agent.alias)).assignedAgentId, claude.agent.id);
   assert.equal((await call(bobMcp, 'clqn_claim_task', { taskId: 'review' })).ownerAgentId, claude.agent.id);
   const denied = await aliceMcp.callTool({ name: 'clqn_complete_task', arguments: { taskId: task.id } });
   assert.equal(denied.isError, true);
-  assert.equal((await run(claudeEnv, ['task', 'release', task.id])).status, 'open');
-  assert.equal((await run(codexEnv, ['task', 'start', task.id])).ownerAgentId, codex.agent.id);
+  assert.equal((await call(bobMcp, 'clqn_release_task', { taskId: task.id })).status, 'open');
+  assert.equal((await call(aliceMcp, 'clqn_claim_task', { taskId: task.id })).ownerAgentId, codex.agent.id);
   assert.equal((await call(aliceMcp, 'clqn_complete_task', { taskId: task.id })).status, 'completed');
-  const secondTask = await run(bobEnv, ['task', 'add', 'confirm']);
+  const secondTask = await bobApi.createTask(clan.id, 'confirm', undefined, 'confirm');
   assert.equal(secondTask.alias, 'confirm');
   assert.equal(secondTask.description, 'confirm');
-  assert.equal((await run(aliceEnv, ['task', 'alias', 'confirm', 'verify'])).id, secondTask.id);
-  assert.equal((await run(bobEnv, ['agent', 'alias', claude.agent.alias, 'reviewer'])).id, claude.agent.id);
+  assert.equal((await aliceApi.setTaskAlias(clan.id, 'confirm', 'verify')).id, secondTask.id);
+  assert.equal((await bobApi.setAgentAlias(clan.id, claude.agent.alias, 'reviewer')).id, claude.agent.id);
   await call(bobMcp, 'clqn_claim_task', { taskId: 'verify' });
   assert.equal((await call(bobMcp, 'clqn_complete_task', { taskId: secondTask.id })).status, 'completed');
   assert.equal((await call(aliceMcp, 'clqn_list_tasks')).tasks.length, 2);
-  assert.equal((await run(aliceEnv, ['task', 'list'])).tasks.length, 2);
-  const status = await run(aliceEnv, ['status']);
+  assert.equal((await aliceApi.listTasks(clan.id)).tasks.length, 2);
+  const status = await aliceApi.status(clan.id);
   assert.equal(status.clan.id, clan.id);
   assert.deepEqual(status.stats, { members: 2, agents: 2, tasks: { open: 0, claimed: 0, completed: 2 } });
-  assert.equal('recentActivity' in status, false);
-  const log: { events: ActivityEvent[] } = await run(bobEnv, ['log']);
-  assert.ok(log.events.some((event) => event.type === 'task.completed'));
-  assert.ok(log.events.every((event, i) => i === 0 || event.sequence < log.events[i - 1]!.sequence));
   assert.equal((await call(bobMcp, 'clqn_get_status')).stats.tasks.completed, 2);
   const events: ActivityEvent[] = (
     await (
