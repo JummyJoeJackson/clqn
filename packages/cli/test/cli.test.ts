@@ -82,6 +82,7 @@ async function workspaceFixture(t: TestContext) {
     email: 'bob@example.com',
     expiresAt: '2026-11-21T12:00:00.000Z',
   };
+  const pending = [{ clanId: clan.id, clanName: clan.name, expiresAt: invitation.expiresAt }];
   const requests: { path: string | undefined; authorization: string | undefined }[] = [];
   const token = 'clqn_example_secret';
   const server = createServer(async (request, response) => {
@@ -114,6 +115,12 @@ async function workspaceFixture(t: TestContext) {
       assert.deepEqual(JSON.parse(body), { email: invitation.email });
       response.writeHead(201);
       response.end(JSON.stringify(invitation));
+    } else if (request.url === '/v1/invitations') response.end(JSON.stringify({ invitations: pending }));
+    else if (request.url === '/v1/invitations/accept' && request.method === 'POST') {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      assert.deepEqual(JSON.parse(body), { clanId: clan.id });
+      response.end(JSON.stringify(clan));
     } else if (request.url === '/v1/invitations/join' && request.method === 'POST') {
       let body = '';
       for await (const chunk of request) body += chunk;
@@ -150,7 +157,7 @@ async function workspaceFixture(t: TestContext) {
     result.child.stdin?.end(options.input);
     return result;
   };
-  return { call, directory, user, clan, members, invitation, token, requests, url };
+  return { call, directory, user, clan, members, invitation, pending, token, requests, url };
 }
 
 test('CLI marks revoked agents in the agent list', async (t) => {
@@ -164,13 +171,33 @@ test('CLI marks revoked agents in the agent list', async (t) => {
 test('CLI invitations normalize email, support an explicit clan, and joining selects the clan', async (t) => {
   const f = await workspaceFixture(t);
   await f.call(['login'], { input: f.token });
+  const { code, ...invitation } = f.invitation;
   assert.deepEqual(
     JSON.parse((await f.call(['invite', ' Bob@Example.com ', '--clan', f.clan.id, '--json'])).stdout),
-    f.invitation,
+    invitation,
   );
-  assert.deepEqual(JSON.parse((await f.call(['join', f.invitation.code, '--json'])).stdout), f.clan);
+  assert.doesNotMatch((await f.call(['invite', f.invitation.email, '--clan', f.clan.id])).stdout, /clqn_inv_/);
+  assert.deepEqual(JSON.parse((await f.call(['join', '--list', '--json'])).stdout), { invitations: f.pending });
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations');
+  assert.deepEqual(JSON.parse((await f.call(['join', '--json'])).stdout), f.clan);
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations/accept');
   assert.deepEqual(JSON.parse((await f.call(['members', '--json'])).stdout), f.members);
-  assert.deepEqual(JSON.parse((await f.call(['invite', f.invitation.email, '--json'])).stdout), f.invitation);
+  assert.deepEqual(JSON.parse((await f.call(['invite', f.invitation.email, '--code', '--json'])).stdout), f.invitation);
+  assert.deepEqual(JSON.parse((await f.call(['join', code, '--json'])).stdout), f.clan);
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations/join');
+});
+
+test('CLI lists multiple invitations and can join one by name', async (t) => {
+  const f = await workspaceFixture(t);
+  await f.call(['login'], { input: f.token });
+  f.pending.push({ ...f.pending[0]!, clanId: f.user.id, clanName: 'Other project' });
+  const { stdout } = await f.call(['join']);
+  assert.match(stdout, /Pending invitations:\nMy project\nOther project/);
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations');
+  assert.deepEqual(JSON.parse((await f.call(['join', 'my project', '--json'])).stdout), f.clan);
+  assert.equal(f.requests.at(-1)?.path, '/v1/invitations/accept');
+  f.pending[1]!.clanName = f.clan.name;
+  await assert.rejects(f.call(['join', f.clan.name]), /Several pending invitations have that name/);
 });
 
 test('CLI removes members and transfers leadership by email, and leaving clears the selected clan', async (t) => {
@@ -195,7 +222,7 @@ test('CLI rejects malformed invitation input before making an HTTP request', asy
   for (const args of [
     ['invite', 'bob@example.com'],
     ['invite', 'invalid-email', '--clan', f.clan.id],
-    ['join', 'invalid-code'],
+    ['join', ' '],
   ]) {
     await assert.rejects(f.call([...args, '--json']), (thrown) => {
       const error = thrown as ExecError;

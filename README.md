@@ -69,7 +69,7 @@ clqn invite teammate@example.com
 
 Open GitHub from the terminal, enter the short code GitHub requests, and approve sign-in.
 
-Invited? Sign in and run `clqn join <invite-code>`.
+Invited? Sign in to the same clqn server with the invited email, then run `clqn join`. If you have several invitations, use `clqn join "My project"`.
 
 For a self-hosted clan, sign in with `clqn login --server <https-address>` once. Your team uses that same address and clqn remembers it for future commands. [Hosting guide](docs/hosting.md)
 

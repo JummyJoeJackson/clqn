@@ -3,6 +3,8 @@ import { serveMcp } from '@clqn/mcp';
 import {
   ApiError,
   ClqnClient,
+  createClanSchema,
+  invitationCodeSchema,
   registerAgentSchema,
   repositoryInputSchema,
   repositorySlugSchema,
@@ -298,26 +300,57 @@ program
   });
 
 program
-  .command('join <invite-code>')
-  .description('Join a clan using an invitation for your email and select it for this API')
-  .action(async (code: string) => {
+  .command('join [clan]')
+  .description('Accept a pending clan invitation for your signed-in email')
+  .option('--list', 'show pending invitations without accepting one')
+  .action(async (clanName: string | undefined, options: { list?: boolean }) => {
+    const name = clanName === undefined ? undefined : createClanSchema.parse({ name: clanName }).name;
+    const api = await client();
     const config = await readConfig(apiUrl());
-    const clan = await (await client()).joinClan(code);
+    const code = invitationCodeSchema.safeParse(name);
+    let clan: Awaited<ReturnType<ClqnClient['joinClan']>>;
+    if (!options.list && code.success) {
+      clan = await api.joinClan(code.data);
+    } else {
+      const { invitations } = await api.listInvitations();
+      if (options.list || (name === undefined && invitations.length !== 1)) {
+        const lines = invitations.map((invitation) => invitation.clanName).join('\n');
+        output(
+          { invitations },
+          lines
+            ? `Pending invitations:\n${lines}\n\nTo accept one, run clqn join "<clan name>".`
+            : 'No pending invitations. Ask your teammate to invite the email you signed in with.',
+        );
+        return;
+      }
+      const byId = invitations.find((invitation) => invitation.clanId === name);
+      const byName = invitations.filter((invitation) => invitation.clanName.toLowerCase() === name?.toLowerCase());
+      if (!byId && byName.length > 1)
+        throw new Error('Several pending invitations have that name. Run clqn join --list --json and use the clan ID.');
+      const invitation = name === undefined ? invitations[0] : (byId ?? byName[0]);
+      if (!invitation) throw new Error('No pending invitation for that clan. Run clqn join --list.');
+      clan = await api.acceptInvitation(invitation.clanId);
+    }
     await writeConfig(apiUrl(), { ...config, clanId: clan.id });
     output(clan, `Joined and selected ${clan.name}.`);
   });
 
 program
   .command('invite <email>')
-  .description('Create a single-use invitation (clan leaders only)')
+  .description('Invite someone to your clan by email (clan leaders only)')
   .option('--clan <id>', 'clan ID (defaults to the last clan created or joined)')
-  .action(async (email: string, options: { clan?: string }) => {
+  .option('--code', 'show a single-use invitation code for older clients')
+  .action(async (email: string, options: { clan?: string; code?: boolean }) => {
     const clanId = await selectedClan(options);
-    const invitation = await (await client()).createInvitation(clanId, email);
-    output(
-      invitation,
-      `Invitation for ${invitation.email}: ${invitation.code}\nExpires ${invitation.expiresAt}. Share the code privately with the intended member.`,
-    );
+    const { code, ...invitation } = await (await client()).createInvitation(clanId, email);
+    if (options.code) {
+      output(
+        { code, ...invitation },
+        `Invitation for ${invitation.email}: ${code}\nExpires ${invitation.expiresAt}. Share the code privately with the intended member.`,
+      );
+    } else {
+      output(invitation, `Invited ${invitation.email}. Ask them to sign in to the same clqn server and run clqn join.`);
+    }
   });
 
 const members = program

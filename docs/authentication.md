@@ -35,15 +35,15 @@ Only a human leader can create invitations:
 clqn invite bob@example.com
 ```
 
-Deliver the code privately. It expires after seven days and can be used once. There is no email delivery or code recovery; create another invitation if needed.
-
-The recipient signs in with the matching email identity, then runs:
+Tell the recipient to sign in to the same clqn server using the invited email. Invitations expire after seven days. clqn keeps them ready for the recipient to find after signing in.
 
 ```sh
-clqn join <invite-code>
+clqn join                # Accept the only pending invitation or show the available clans
+clqn join "My project"   # Accept a specific invitation
+clqn join --list         # See pending invitations
 ```
 
-Invalid, expired, consumed, or mismatched codes return 404. Existing members receive `409 ALREADY_MEMBER` without consuming the code.
+With GitHub sign-in, use the account whose verified primary email matches the invitation. For older CLI releases, the leader can run `clqn invite bob@example.com --code` and share the one-time code privately. The older CLI accepts it with `clqn join <invite-code>`.
 
 ## Remove a member or leave
 
@@ -53,7 +53,7 @@ clqn members transfer bob@example.com   # leader only; you become a member
 clqn leave                              # any member except the leader
 ```
 
-Removal and leaving end the member's access and revoke the tokens of their agents in that clan; a later invitation does not revive those tokens. Their claimed tasks and assignments stay in place until the leader runs `task release` or `task unassign`. The leader cannot leave or be removed; transfer leadership first. On transfer, the previous leader's orchestrator becomes a worker so the new leader can register their own.
+Removal and leaving end the member's access, close their pending invitations, and revoke the tokens of their agents in that clan; a later invitation does not revive those tokens. Their claimed tasks and assignments stay in place until the leader runs `task release` or `task unassign`. The leader cannot leave or be removed; transfer leadership first. On transfer, the previous leader's orchestrator becomes a worker so the new leader can register their own.
 
 ## Register an agent
 
@@ -97,6 +97,6 @@ The orchestrator can assign open tasks and report integrations. It cannot change
 
 All `/v1` routes require `Authorization: Bearer <token>` and return JSON with `Cache-Control: no-store`. Routes under `/v1/clans/:clanId` cover members, agents, context, tasks, policies, repositories, status, stats, and events. Personal-only and leader-only restrictions match the CLI rules above.
 
-`GET /v1/me` returns the current identity. `POST /v1/clans` creates a clan; `GET /v1/clans` lists accessible clans. Invitations use `POST /v1/clans/:clanId/invitations` and `POST /v1/invitations/join`.
+`GET /v1/me` returns the current identity. `POST /v1/clans` creates a clan; `GET /v1/clans` lists accessible clans. Create invitations with `POST /v1/clans/:clanId/invitations`. The signed-in recipient lists them with `GET /v1/invitations` and accepts one with `POST /v1/invitations/accept`. Existing codes can still be accepted with `POST /v1/invitations/join`.
 
 `GET /health` is public process liveness, independent of the database. [Webhook deliveries](webhooks.md) use signatures instead of bearer tokens. MCP is a local stdio adapter to the authenticated API.

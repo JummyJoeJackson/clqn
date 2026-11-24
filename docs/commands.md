@@ -59,7 +59,7 @@ Use your personal credential to rename an agent you registered. A task’s claim
 | `login` | Sign in with GitHub. Use `--server <url>` to choose a self-hosted instance |
 | `whoami` | Show the human or agent identity |
 | `init "My project"` | Create and select a clan |
-| `invite bob@example.com` / `join <code>` | Invite or join |
+| `invite bob@example.com` / `join [clan]` | Invite someone by email or accept an invitation |
 | `members remove <member>` / `leave` | Remove a member (leader) or leave a clan |
 | `members transfer <member>` | Hand clan leadership to another member |
 | `clans` / `members` / `agent list` | List participants and workspaces |
@@ -92,4 +92,4 @@ Use either `--code` (optionally with `--base-branch`) or explicit repository fla
 
 ## API list pagination
 
-Clan, member, agent, repository and context list endpoints return at most 100 items by default. Use `?limit=1..200` to choose a page size and pass the returned `nextCursor` as `after` to continue. Context cursors are keys; the other cursors are UUIDs. CLI and MCP lists follow these pages automatically to preserve existing results. Task lists expose pages directly through `--limit` and `--after`. Context history is bounded to the latest 100 revisions.
+Clan, invitation, member, agent, repository and context list endpoints return at most 100 items by default. Use `?limit=1..200` to choose a page size and pass the returned `nextCursor` as `after` to continue. Context cursors are keys; the other cursors are UUIDs. CLI and MCP lists follow these pages automatically to preserve existing results. Task lists expose pages directly through `--limit` and `--after`. Context history is bounded to the latest 100 revisions.

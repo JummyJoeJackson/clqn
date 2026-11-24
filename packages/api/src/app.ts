@@ -64,11 +64,10 @@ export function createApp(
       const clanPath = c.req.path.match(/^\/v1\/clans\/([^/]+)/);
       if (clanPath && clanPath[1] !== user.clanId)
         return c.json({ error: { code: 'NOT_FOUND', message: 'Clan not found' } }, 404);
+      if (c.req.path === '/v1/invitations' || c.req.path.startsWith('/v1/invitations/')) requirePersonal(user);
       if (
         c.req.method === 'POST' &&
-        (c.req.path === '/v1/clans' ||
-          c.req.path === '/v1/invitations/join' ||
-          /^\/v1\/clans\/[^/]+\/(invitations|agents)$/.test(c.req.path))
+        (c.req.path === '/v1/clans' || /^\/v1\/clans\/[^/]+\/(invitations|agents)$/.test(c.req.path))
       )
         requirePersonal(user);
     }

@@ -96,6 +96,13 @@ export type Clan = z.infer<typeof clanSchema>;
 export const createInvitationSchema = z.object({ email: z.string().trim().toLowerCase().pipe(z.email()) }).strict();
 export const invitationCodeSchema = z.string().regex(/^clqn_inv_[A-Za-z0-9_-]{43}$/);
 export const joinInvitationSchema = z.object({ code: invitationCodeSchema }).strict();
+export const acceptInvitationSchema = z.object({ clanId: z.uuid() }).strict();
+const pendingInvitationSchema = z.object({ clanId: z.uuid(), clanName: z.string(), expiresAt: z.iso.datetime() });
+export type PendingInvitation = z.infer<typeof pendingInvitationSchema>;
+const pendingInvitationsSchema = z.object({
+  invitations: z.array(pendingInvitationSchema),
+  nextCursor: z.uuid().optional(),
+});
 export const invitationSchema = z.object({
   code: invitationCodeSchema,
   clanId: z.uuid(),
@@ -255,6 +262,13 @@ export class ClqnClient {
       invitationSchema,
       createInvitationSchema.parse({ email }),
     );
+  }
+  async listInvitations() {
+    const pages = await this.pages('/v1/invitations', pendingInvitationsSchema);
+    return { invitations: pages.flatMap((page) => page.invitations) };
+  }
+  acceptInvitation(clanId: string): Promise<Clan> {
+    return this.request('/v1/invitations/accept', clanSchema, acceptInvitationSchema.parse({ clanId }));
   }
   joinClan(code: string): Promise<Clan> {
     return this.request('/v1/invitations/join', clanSchema, joinInvitationSchema.parse({ code }));

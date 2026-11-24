@@ -1,6 +1,7 @@
 import {
   type Actor,
   ApiError,
+  acceptInvitationSchema,
   createClanSchema,
   createInvitationSchema,
   joinInvitationSchema,
@@ -56,6 +57,18 @@ export function createClanRoutes(store: WorkspaceStore) {
     const invitation = await store.createInvitation(c.get('user').id, id.data, parsed.data.email);
     if (!invitation) return c.json({ error: { code: 'NOT_FOUND', message: 'Clan not found' } }, 404);
     return c.json(invitation, 201);
+  });
+  app.get('/invitations', async (c) => {
+    const page = parsePage(c.req.query());
+    const invitations = await store.listInvitations(c.get('user'), page);
+    return c.json(pageResponse('invitations', invitations, page.limit, (invitation) => invitation.clanId));
+  });
+  app.post('/invitations/accept', smallBody, async (c) => {
+    const parsed = acceptInvitationSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: { code: 'INVALID_REQUEST', message: 'Provide a valid clan ID' } }, 400);
+    const clan = await store.joinInvitation(c.get('user'), parsed.data);
+    if (!clan) return c.json({ error: { code: 'NOT_FOUND', message: 'Invitation not found' } }, 404);
+    return c.json(clan);
   });
   app.post('/invitations/join', smallBody, async (c) => {
     const parsed = joinInvitationSchema.safeParse(await c.req.json().catch(() => null));

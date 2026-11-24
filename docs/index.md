@@ -17,7 +17,7 @@ clqn init "My project"
 clqn invite teammate@example.com
 ```
 
-Invited members sign in with their own account and run `clqn join <invite-code>`. Use `clqn members` to see who joined.
+Invited members sign in to the same clqn server with the email address the leader invited, then run `clqn join`. With several invitations, pick one by running `clqn join "My project"`. Use `clqn members` to see who joined.
 
 ## Connect an agent
 
