@@ -1,12 +1,10 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { ApiError, ClqnClient } from '@clqn/shared';
-import { hostedServer, legacyLocalServer, preferredServer, serverOrigin } from './config.js';
+import { hostedServer, preferredServer, serverOrigin } from './config.js';
 import { terminalText } from './terminal.js';
 
-export async function loginServer(explicit: string | undefined, github: boolean): Promise<string> {
-  if (explicit !== undefined) return serverOrigin(explicit);
-  // Keep piped credentials targeted at their original default unless an address is specified.
-  return github ? preferredServer() : legacyLocalServer;
+export async function loginServer(explicit: string | undefined): Promise<string> {
+  return explicit === undefined ? preferredServer() : serverOrigin(explicit);
 }
 
 export async function readLoginToken(): Promise<string> {
@@ -52,7 +50,6 @@ export async function githubLogin(server: string, json: boolean) {
     terminalText(
       `Open GitHub to authorize clqn:\n${attempt.verificationUri}\n\nEnter this one-time GitHub code: ${attempt.userCode}`,
       process.stderr.isTTY && !json,
-      [attempt.verificationUri],
     ),
   );
   const deadline = Date.now() + attempt.expiresIn * 1000;

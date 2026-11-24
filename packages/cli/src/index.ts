@@ -33,7 +33,6 @@ import {
 import {
   type Config,
   hostedServer,
-  legacyLocalServer,
   preferredServer,
   readConfig,
   removeConfig,
@@ -79,16 +78,13 @@ const program = new Command()
       return;
     }
     if (command.name() === 'login') return;
-    // An unscoped environment credential keeps its original loopback target.
-    serverUrl =
-      configuredServer() ?? (process.env.CLQN_TOKEN === undefined ? await preferredServer() : legacyLocalServer);
+    serverUrl = configuredServer() ?? (await preferredServer());
   });
 
 const configuredServer = () => program.opts<{ apiUrl?: string }>().apiUrl ?? process.env.CLQN_API_URL;
 const apiUrl = () => serverUrl;
 const verbatim = (value: unknown, text: string) => console.log(program.opts().json ? JSON.stringify(value) : text);
-const output = (value: unknown, human: string, urls?: readonly (string | null | undefined)[]) =>
-  verbatim(value, terminalText(human, process.stdout.isTTY, urls));
+const output = (value: unknown, human: string) => verbatim(value, terminalText(human, process.stdout.isTTY));
 const displayId = (value: { id: string; alias?: string | null | undefined }) =>
   value.alias ? `${value.alias} (${value.id})` : value.id;
 const defaultAlias = (name: string) => resourceAliasSchema.safeParse(name.trim()).data;
@@ -206,7 +202,7 @@ program
     const github = options.github === true || process.stdin.isTTY === true;
     if (options.server !== undefined && program.opts().apiUrl !== undefined)
       throw new Error('Use one server option for sign-in, either --server or --api-url');
-    serverUrl = await loginServer(options.server ?? configuredServer(), github);
+    serverUrl = await loginServer(options.server ?? configuredServer());
     if (github) {
       const user = await signInWithGithub();
       output(user, `Logged in as ${user.email}`);
@@ -546,12 +542,9 @@ agent
         registration.alias,
       );
       await rememberAgent(result, options.runtime);
-      const reference = result.agent.alias ?? result.agent.name;
-      const quoted = result.agent.alias ?? `'${reference.replaceAll("'", "'\\''")}'`;
-      const launchOptions = `${options.clan ? ` --clan ${result.agent.clanId}` : ''}${options.runtime ? '' : ' --runtime codex'}`;
-      const launch = reference.startsWith('-')
-        ? `clqn agent run${launchOptions} -- ${quoted}`
-        : `clqn agent run ${quoted}${launchOptions}`;
+      // Aliases and IDs never need shell quoting.
+      const clan = options.clan ? ` --clan ${result.agent.clanId}` : '';
+      const launch = `clqn agent run ${result.agent.alias ?? result.agent.id}${clan}`;
       const added = `Registered ${agentLabel(result.agent)} as a ${result.agent.role}.`;
       output(
         options.showToken ? result : { agent: agentSummary(result.agent) },
@@ -758,7 +751,7 @@ task
           : undefined;
       const alias = options.alias ?? defaultAlias(description);
       const result = await (await client()).createTask(await selectedClan(options), description, repository, alias);
-      output(result, describeTask(result), [result.repository?.prUrl]);
+      output(result, describeTask(result));
     },
   );
 task
@@ -767,7 +760,7 @@ task
   .option('--clan <id>', 'clan ID')
   .action(async (id: string, alias: string, options: { clan?: string }) => {
     const result = await (await client()).setTaskAlias(await selectedClan(options), id, alias);
-    output(result, describeTask(result), [result.repository?.prUrl]);
+    output(result, describeTask(result));
   });
 task
   .command('list')
@@ -788,18 +781,14 @@ task
       mine: filters.mine === 'true',
     });
     const more = result.nextCursor ? `\n\nMore tasks: task list --after ${result.nextCursor}` : '';
-    output(
-      result,
-      (result.tasks.map(describeTask).join('\n\n') || 'No tasks.') + more,
-      result.tasks.map((entry) => entry.repository?.prUrl),
-    );
+    output(result, (result.tasks.map(describeTask).join('\n\n') || 'No tasks.') + more);
   });
 task
   .command('show <id>')
   .option('--clan <id>', 'clan ID')
   .action(async (id: string, options: { clan?: string }) => {
     const result = await (await client()).task(await selectedClan(options), id);
-    output(result, describeTask(result), [result.repository?.prUrl]);
+    output(result, describeTask(result));
   });
 task
   .command('assign <id>')
@@ -807,7 +796,7 @@ task
   .option('--clan <id>', 'clan ID')
   .action(async (id: string, options: { clan?: string; agent: string }) => {
     const result = await (await client()).assignTask(await selectedClan(options), id, options.agent);
-    output(result, describeTask(result), [result.repository?.prUrl]);
+    output(result, describeTask(result));
   });
 task
   .command('unassign <id>')
@@ -816,7 +805,7 @@ task
   .option('--clan <id>', 'clan ID')
   .action(async (id: string, options: { clan?: string; agent: string }) => {
     const result = await (await client()).unassignTask(await selectedClan(options), id, options.agent);
-    output(result, describeTask(result), [result.repository?.prUrl]);
+    output(result, describeTask(result));
   });
 const ownedRepositoryTask = async (api: ClqnClient, clanId: string, id: string) => {
   const value = await api.task(clanId, id);
@@ -903,7 +892,7 @@ task
         expectedHeadSha: repository.headSha,
         ...pushed,
       });
-      output(result, describeTask(result), [result.repository?.prUrl]);
+      output(result, describeTask(result));
     } catch (error) {
       throw new Error(
         `PR ${pushed.prUrl} was published, but the clan report failed. Read task state before retrying. ${error instanceof Error ? error.message : 'API request failed'}`,
@@ -921,7 +910,6 @@ task
     output(
       { taskId: value.id, ...result },
       `${result.url}\n${result.state}  checks=${result.checksPassed ? 'passed' : 'not passed'}\nHead: ${result.headSha}`,
-      [result.url],
     );
   });
 task
@@ -963,7 +951,6 @@ task
       integrated.repository?.state === 'merged'
         ? describeTask(integrated)
         : `${describeTask(integrated)}\nMerged on GitHub; the task is marked merged when GitHub's signed webhook confirms it.`,
-      [integrated.repository?.prUrl],
     );
   });
 for (const action of ['release', 'complete'] as const) {

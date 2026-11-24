@@ -1,9 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { type Actor, type Agent, ApiError, type Clan, type PageQuery, type PendingInvitation } from '@clqn/shared';
-import { and, count, desc, eq, gt, gte, inArray, isNull, notExists, sql as query } from 'drizzle-orm';
+import { and, count, desc, eq, gt, inArray, isNull, sql as query } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { appendEvent, lockClan, requireClan, requirePersonal, type WorkspaceDb } from '../lib/access.js';
+import { appendEvent, lockClan, requireClan, requirePersonal } from '../lib/access.js';
 import { resourceFilter, rethrowAliasConflict } from '../lib/aliases.js';
 import { limitReached, limits } from '../lib/limits.js';
 import * as schema from './schema.js';
@@ -48,29 +48,6 @@ const pendingFor = (email: string) =>
     eq(schema.invitations.email, email),
     isNull(schema.invitations.consumedAt),
     gt(schema.invitations.expiresAt, query`now()`),
-  );
-
-// Take this before membership or invitation row locks. An email can receive invites before it has a user row.
-const lockInvitationRecipient = (tx: Pick<WorkspaceDb, 'execute'>, email: string) =>
-  tx.execute(query`select pg_advisory_xact_lock(hashtextextended(${email}::text, 2))`);
-
-// Invitations issued before a past removal can predate the cleanup in removeMember.
-const currentInvitation = (db: WorkspaceDb, actor: Actor) =>
-  and(
-    pendingFor(actor.email),
-    notExists(
-      db
-        .select({ id: schema.events.id })
-        .from(schema.events)
-        .where(
-          and(
-            eq(schema.events.clanId, schema.invitations.clanId),
-            eq(schema.events.resourceId, actor.id),
-            inArray(schema.events.type, ['member.removed', 'member.left']),
-            gte(schema.events.createdAt, schema.invitations.createdAt),
-          ),
-        ),
-    ),
   );
 
 export function createStore(url: string, poolSize = 10) {
@@ -256,7 +233,6 @@ export function createStore(url: string, poolSize = 10) {
     },
     async createInvitation(userId, clanId, email) {
       return db.transaction(async (tx) => {
-        await lockInvitationRecipient(tx, email);
         const [leader] = await tx
           .select()
           .from(schema.memberships)
@@ -277,9 +253,7 @@ export function createStore(url: string, poolSize = 10) {
             email,
             createdBy: userId,
             codeHash: hashToken(code),
-            // Order against removal after acquiring the recipient lock.
-            createdAt: query`clock_timestamp()`,
-            expiresAt: query`clock_timestamp() + interval '7 days'`,
+            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
           })
           .returning();
         if (!invitation) throw new Error('Invitation creation returned no row');
@@ -303,7 +277,7 @@ export function createStore(url: string, poolSize = 10) {
         )
         .where(
           and(
-            currentInvitation(db, actor),
+            pendingFor(actor.email),
             isNull(schema.memberships.userId),
             page.after ? gt(schema.invitations.clanId, page.after) : undefined,
           ),
@@ -315,19 +289,11 @@ export function createStore(url: string, poolSize = 10) {
     async joinInvitation(actor, reference) {
       requirePersonal(actor);
       return db.transaction(async (tx) => {
-        await lockInvitationRecipient(tx, actor.email);
+        // Accepting by clan consumes every pending invitation for it, so no duplicate outlives the membership.
         const match =
           typeof reference === 'string'
             ? eq(schema.invitations.codeHash, hashToken(reference))
-            : eq(
-                schema.invitations.id,
-                tx
-                  .select({ id: schema.invitations.id })
-                  .from(schema.invitations)
-                  .where(and(eq(schema.invitations.clanId, reference.clanId), currentInvitation(tx, actor)))
-                  .orderBy(desc(schema.invitations.expiresAt), schema.invitations.id)
-                  .limit(1),
-              );
+            : eq(schema.invitations.clanId, reference.clanId);
         const [invitation] = await tx
           .update(schema.invitations)
           .set({ consumedAt: query`now()` })
@@ -374,7 +340,6 @@ export function createStore(url: string, poolSize = 10) {
           .select({ email: schema.users.email })
           .from(schema.users)
           .where(eq(schema.users.id, userId));
-        if (user) await lockInvitationRecipient(tx, user.email);
         const leaving = userId === actor.id;
         // Lock the actor's row so a concurrent leadership transfer cannot leave a stale leader check.
         const membership = await requireClan(tx, actor, clanId, leaving ? 'update' : 'share');

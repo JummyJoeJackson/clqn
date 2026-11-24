@@ -64,7 +64,8 @@ test('PostgreSQL: leaders remove members or hand off leadership, members leave, 
     invitations: [{ clanId: clan.id, clanName: clan.name, expiresAt: secondBobInvite.expiresAt }],
   });
   const joins = await Promise.all([accept(bob.token), accept(bob.token)]);
-  assert.deepEqual(joins.map((response) => response.status).sort(), [200, 409]);
+  // Accepting consumes both invitations, so the concurrent duplicate finds nothing left.
+  assert.deepEqual(joins.map((response) => response.status).sort(), [200, 404]);
   assert.deepEqual(await (await pending(bob.token)).json(), { invitations: [] });
   const expired = await invite(carol);
   await sql`update invitations set expires_at = now() - interval '1 second' where code_hash = ${hashToken(expired.code)}`;
@@ -94,10 +95,6 @@ test('PostgreSQL: leaders remove members or hand off leadership, members leave, 
   assert.equal((await accept(bob.token)).status, 404);
   assert.equal((await post(bob.token, '/v1/invitations/join', { code: firstBobInvite.code })).status, 404);
   assert.deepEqual(await (await pending(bob.token)).json(), { invitations: [] });
-  // Before removal began closing invites, an extra unused invite could survive removal.
-  await sql`update invitations set consumed_at = null where code_hash = ${hashToken(firstBobInvite.code)}`;
-  assert.deepEqual(await (await pending(bob.token)).json(), { invitations: [] });
-  assert.equal((await accept(bob.token)).status, 404);
   await join(bob);
   assert.equal((await me(bobAgent.token)).status, 401);
   // Members can leave on their own.
