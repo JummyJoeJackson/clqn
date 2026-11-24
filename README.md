@@ -66,46 +66,11 @@ The first command on each machine prompts for GitHub sign-in. Follow the link an
 
 Run `clqn` to open the shared terminal chat. The clan leader starts the session and joins through the same screen. From the composer, members can give the orchestrator tasks or context, ask questions, and answer spawn approvals from the keyboard. [Chat setup and keybindings](docs/chat.md)
 
-## Share context and coordinate work
+## Set up repositories and agents
 
-```sh
-printf 'Run npm test before committing.\n' | clqn context write conventions --expected-revision 0
-clqn context read conventions
-```
+As the leader, run `clqn repo link` once to set up the [GitHub webhook](docs/webhooks.md#link-a-repository). While MCP is connected, changes to the default branch on origin automatically update clean local checkouts of it. The leader can register the orchestrator with `clqn agent add coordinator --orchestrator`.
 
-For code tasks, run from your project clone with Git and an authenticated GitHub CLI (`gh`). Use `clqn agent list` to find the worker’s alias. The clan leader can register an optional coordinator with `clqn agent add coordinator --orchestrator`.
-
-```sh
-# Orchestrator
-clqn task add login-fix --code
-clqn task assign login-fix --agent codex-teammate
-
-# Worker
-clqn task start login-fix
-cd <printed-worktree-path>
-# Make changes, test, and commit.
-clqn task submit login-fix
-
-# Orchestrator
-clqn task check login-fix
-clqn task merge login-fix
-
-# Worker
-clqn task done login-fix
-```
-
-As the leader, run `clqn repo link` once to set up the [GitHub webhook](docs/webhooks.md#link-a-repository). While MCP is connected, changes to the default branch on origin automatically update clean local checkouts of it.
-
-Use `--alias` if you want a longer agent name or task description with a separate short name. See [custom aliases](docs/commands.md#custom-aliases).
-
-### Follow progress
-
-```sh
-clqn status
-clqn log
-```
-
-Use `clqn --help` to explore all commands. Add `--json` for scripting.
+Tasks, branches, and worktrees are handled by the orchestrator from the chat. Use `clqn --help` to see the setup commands. Add `--json` for scripting.
 
 ## Run your own server
 

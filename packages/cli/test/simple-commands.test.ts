@@ -15,7 +15,6 @@ const run = promisify(execFile);
 const cli = fileURLToPath(new URL('../src/index.ts', import.meta.url));
 const clanId = '84367b51-14c7-43de-84a1-faf0207eadb3';
 const userId = 'd724b185-7509-4bc1-adf6-eb7978f96a1a';
-const otherUserId = 'ab840359-0218-4c43-aa5b-3da942cc566d';
 const agentId = '9608d1b9-bcaf-4f20-adab-10305cf5474f';
 const taskId = 'feeb7372-1243-423f-9f3c-9ed8d5a24b57';
 const createdAt = '2026-11-14T12:00:00.000Z';
@@ -31,28 +30,6 @@ async function fixture(t: TestContext) {
   const agentToken = `clqn_${'a'.repeat(43)}`;
   const agentActor = { ...user, agentId, clanId };
   let registered: { id: string; name: string; role: string; alias?: string } | undefined;
-  const task = {
-    id: taskId,
-    clanId,
-    description: 'Assigned work',
-    status: 'claimed',
-    ownerId: otherUserId,
-    ownerAgentId: null,
-    assignedAgentId: null,
-    repository: {
-      slug: 'example/project',
-      baseBranch: 'main',
-      baseSha: 'a'.repeat(40),
-      branch: 'clqn/simple-task',
-      headSha: null,
-      prNumber: null,
-      prUrl: null,
-      mergeCommitSha: null,
-      state: 'pending',
-    },
-    createdAt,
-    updatedAt: createdAt,
-  };
   let policy = {
     clanId,
     userId,
@@ -94,9 +71,6 @@ async function fixture(t: TestContext) {
         policy = { ...policy, ...changes, revision: expectedRevision + 1 };
       }
       response.end(JSON.stringify(policy));
-    } else if (request.url === `/v1/clans/${clanId}/tasks/${taskId}`) response.end(JSON.stringify(task));
-    else if (request.url === `/v1/clans/${clanId}/tasks/${taskId}/complete` && request.method === 'POST') {
-      response.end(JSON.stringify({ ...task, status: 'completed', ownerId: userId }));
     } else {
       response.writeHead(404);
       response.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Unknown route' } }));
@@ -132,16 +106,21 @@ async function fixture(t: TestContext) {
     result.child.stdin?.end(options.input);
     return result;
   };
-  return { call, requests, directory, bin, token, agentToken, user, executions, task };
+  const renameAgent = (name: string) => {
+    if (registered) registered.name = name;
+  };
+  return { call, requests, directory, bin, token, agentToken, user, executions, renameAgent };
 }
 
 test('human output strips terminal control characters from API text, while JSON keeps it exact', async (t) => {
   const f = await fixture(t);
-  f.task.description = 'Fix\x1b]0;spoofed\x07 bug\x1b[2J\r\nnext';
-  const human = (await f.call(['task', 'show', taskId])).stdout;
+  await f.call(['agent', 'add', 'worker', '--json']);
+  const name = 'Fix\x1b]0;spoofed\x07 bug\x1b[2J\r\nnext';
+  f.renameAgent(name);
+  const human = (await f.call(['agent', 'list'])).stdout;
   assert.doesNotMatch(human, /[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
   assert.match(human, /Fix ]0;spoofed  bug \[2J \nnext/);
-  assert.equal(JSON.parse((await f.call(['task', 'show', taskId, '--json'])).stdout).description, f.task.description);
+  assert.equal(JSON.parse((await f.call(['agent', 'list', '--json'])).stdout).agents[0].name, name);
 });
 
 test('agent add registers workers and orchestrators with positional names', async (t) => {
@@ -258,35 +237,6 @@ test('simple commands reject invalid names and limit values before HTTP access',
   assert.equal(f.requests.length, 0);
 });
 
-test('task done uses the completion endpoint and JSON contract', async (t) => {
-  const f = await fixture(t);
-  const done = JSON.parse((await f.call(['task', 'done', taskId, '--json'])).stdout);
-  assert.equal(done.status, 'completed');
-  assert.ok(
-    f.requests.every(
-      (request) => request.method === 'POST' && request.path === `/v1/clans/${clanId}/tasks/${taskId}/complete`,
-    ),
-  );
-  assert.deepEqual(
-    f.requests.map((request) => request.body),
-    [{}],
-  );
-});
-
-test('task submit defaults to the current directory but preserves the ownership preflight', async (t) => {
-  const f = await fixture(t);
-  await assert.rejects(f.call(['task', 'submit', taskId, '--json']), (thrown) => {
-    const error = thrown as ExecError;
-    assert.equal(error.code, 1);
-    assert.equal(error.stdout, '');
-    assert.match(JSON.parse(error.stderr).error.message, /same credential/);
-    return true;
-  });
-  assert.ok(f.requests.every((request) => request.method === 'GET'));
-  assert.equal(f.requests[0]?.path, `/v1/clans/${clanId}/tasks/${taskId}`);
-  await assert.rejects(readFile(f.executions), { code: 'ENOENT' });
-});
-
 test('login accepts piped input', async (t) => {
   const f = await fixture(t);
   const login = JSON.parse((await f.call(['login', '--json'], { input: `${f.token}\n`, savedLogin: true })).stdout);
@@ -305,8 +255,9 @@ test('removed commands and flags fail before API or Git access', async (t) => {
     ['repo', 'sync'],
     ['policy', 'show'],
     ['policy', 'set', '--tokens', '10'],
-    ...['claim', 'prepare', 'publish', 'complete', 'integrate'].map((action) => ['task', action, taskId]),
-    ...['metrics', 'metric', 'usage'].map((action) => [action]),
+    ...['add', 'start', 'submit', 'merge', 'done'].map((action) => ['task', action, taskId]),
+    ...['context', 'status', 'log', 'metrics'].map((action) => [action]),
+    ['agent', 'alias', 'worker', 'short'],
     ['login', '--token-stdin'],
     ['limits', '--token-limit', '10'],
   ])

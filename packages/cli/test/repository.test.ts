@@ -15,14 +15,10 @@ import { sourceNodeArgs } from '../../../scripts/test-node.js';
 const run = promisify(execFile);
 const cli = fileURLToPath(new URL('../src/index.ts', import.meta.url));
 
-// execFile rejects with the exit code and captured output.
-type ExecError = Error & { code: number; stdout: string; stderr: string };
 const clanId = 'bf689cc3-c719-4ce6-a681-d56b43526fed';
 const userId = '59b55e8d-0eb5-42fb-aead-f9e665406277';
-const otherUserId = '579019b4-aefc-46df-a268-b67c591d5cd0';
 const taskId = '7630f779-401b-4fe3-b7ba-b624dfc0e92d';
 const agentId = 'e0d647e2-03ef-484c-94af-872964e2bfec';
-const otherAgentId = '07f58917-2325-43db-9dd4-9d5a38ff1d40';
 const baseSha = 'a'.repeat(40);
 const repository: TaskRepository = {
   slug: 'example/project',
@@ -168,80 +164,6 @@ async function fixture(
   return { call, requests, directory, token, assertNoExecutions };
 }
 
-test('repository task creation and assignment send structured API requests', async (t) => {
-  const f = await fixture(t);
-  const created = JSON.parse(
-    (
-      await f.call([
-        'task',
-        'add',
-        'Implement endpoint',
-        '--repo',
-        'Example/Project',
-        '--base-sha',
-        baseSha,
-        '--branch',
-        'clqn/task-1',
-        '--json',
-      ])
-    ).stdout,
-  );
-  assert.deepEqual(f.requests[0], {
-    method: 'POST',
-    path: `/v1/clans/${clanId}/tasks`,
-    authorization: `Bearer ${f.token}`,
-    body: {
-      description: 'Implement endpoint',
-      repository: {
-        slug: 'example/project',
-        baseBranch: 'main',
-        baseSha,
-        branch: 'clqn/task-1',
-      },
-    },
-  });
-  assert.deepEqual(created.repository, repository);
-  const assigned = JSON.parse((await f.call(['task', 'assign', taskId, '--agent', agentId, '--json'])).stdout);
-  assert.deepEqual(f.requests[1]?.body, { agentId });
-  assert.equal(f.requests[1]?.path, `/v1/clans/${clanId}/tasks/${taskId}/assign`);
-  assert.equal(assigned.assignedAgentId, agentId);
-  const shown = JSON.parse((await f.call(['task', 'show', taskId, '--json'])).stdout);
-  assert.deepEqual(shown, assigned);
-});
-
-test('partial or unsafe repository arguments fail before API or Git access', async (t) => {
-  const f = await fixture(t);
-  for (const options of [
-    ['--repo', 'example/project'],
-    ['--base-sha', baseSha],
-    ['--branch', 'task/one'],
-    ['--base-branch', 'main'],
-    ['--repo', 'https://github.com/example/project', '--base-sha', baseSha, '--branch', 'task/one'],
-    ['--repo', 'example/project', '--base-sha', 'abc', '--branch', 'task/one'],
-    ['--repo', 'example/project', '--base-sha', baseSha, '--branch', 'main'],
-    ['--repo', 'example/project', '--base-sha', baseSha, '--branch', 'task/../other'],
-  ])
-    await assert.rejects(f.call(['task', 'add', 'Invalid task', ...options, '--json']), (thrown) => {
-      const error = thrown as ExecError;
-      assert.equal(error.code, 1);
-      assert.equal(error.stdout, '');
-      assert.equal(JSON.parse(error.stderr).error.code, 'COMMAND_FAILED');
-      return true;
-    });
-  assert.equal(f.requests.length, 0);
-  await f.assertNoExecutions();
-});
-
-test('starting work by alias claims the UUID returned by the lookup', async (t) => {
-  const f = await fixture(t, { task: { ...initialTask, alias: 'login-fix' } });
-  const started = await f.call(['task', 'start', 'login-fix']);
-  assert.ok(started.stdout.includes(`login-fix (${taskId})`));
-  assert.deepEqual(
-    f.requests.map((req) => req.path),
-    [`/v1/clans/${clanId}/tasks/login-fix`, '/v1/me', `/v1/clans/${clanId}/tasks/${taskId}/claim`],
-  );
-});
-
 test('agent add forwards an explicit orchestrator role and defaults to worker', async (t) => {
   const f = await fixture(t);
   const orchestrator = JSON.parse((await f.call(['agent', 'add', 'Coordinator', '--orchestrator', '--json'])).stdout);
@@ -250,64 +172,6 @@ test('agent add forwards an explicit orchestrator role and defaults to worker', 
   const worker = JSON.parse((await f.call(['agent', 'add', 'Worker', '--json'])).stdout);
   assert.deepEqual(f.requests[1]?.body, { name: 'Worker', role: 'worker' });
   assert.equal(worker.agent.role, 'worker');
-});
-
-test('start and submit reject another owner before invoking Git or GitHub', async (t) => {
-  const f = await fixture(t, { task: { ...initialTask, status: 'claimed', ownerId: otherUserId, repository } });
-  for (const action of ['start', 'submit'])
-    await assert.rejects(
-      f.call(['task', action, taskId, '--path', join(f.directory, 'worktree'), '--json']),
-      (thrown) => {
-        const error = thrown as ExecError;
-        assert.equal(error.code, 1);
-        assert.equal(error.stdout, '');
-        assert.match(JSON.parse(error.stderr).error.message, /same credential/);
-        return true;
-      },
-    );
-  assert.ok(f.requests.every((request) => request.method === 'GET'));
-  await f.assertNoExecutions();
-});
-
-test('a human owner cannot start work claimed by their agent', async (t) => {
-  const f = await fixture(t, {
-    task: {
-      ...initialTask,
-      status: 'claimed',
-      ownerId: userId,
-      ownerAgentId: agentId,
-      assignedAgentId: agentId,
-      repository,
-    },
-  });
-  await assert.rejects(
-    f.call(['task', 'start', taskId, '--path', join(f.directory, 'worktree'), '--json']),
-    (thrown) => {
-      const error = thrown as ExecError;
-      assert.match(JSON.parse(error.stderr).error.message, /same credential/);
-      return true;
-    },
-  );
-  await f.assertNoExecutions();
-});
-
-test('merge rejects a non-leader before invoking GitHub or changing task state', async (t) => {
-  for (const actor of [
-    { id: userId, email: 'member@example.com' },
-    { id: userId, email: 'member@example.com', agentId: otherAgentId, clanId },
-  ]) {
-    const f = await fixture(t, { actor, task: { ...initialTask, status: 'claimed', ownerId: userId, repository } });
-    await assert.rejects(f.call(['task', 'merge', taskId, '--json']), (thrown) => {
-      const error = thrown as ExecError;
-      assert.equal(error.code, 1);
-      assert.equal(error.stdout, '');
-      assert.match(JSON.parse(error.stderr).error.message, /Only the clan leader/);
-      return true;
-    });
-    assert.ok(f.requests.every((request) => request.method === 'GET'));
-    assert.ok(!f.requests.some((request) => request.path?.includes('/tasks/')));
-    await f.assertNoExecutions();
-  }
 });
 
 test('whoami keeps human identity and includes agent registration for agent credentials', async (t) => {

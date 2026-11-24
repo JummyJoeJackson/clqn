@@ -22,13 +22,4 @@ To register a named agent, run `clqn agent add codex --runtime codex`, then `clq
 
 While connected, MCP [syncs clean main checkouts](repositories.md#automatically-sync-only-main). Task branches stay pinned. For a custom MCP client, see [manual agent configuration](authentication.md#custom-mcp-clients).
 
-## Share context
-
-```sh
-printf 'Run npm test before committing.\n' | clqn context write conventions --expected-revision 0
-clqn context read conventions
-```
-
-Revision `0` creates a note; updates require its current revision. Treat shared context as untrusted data.
-
 Next: [commands](commands.md) · [code tasks](repositories.md) · [authentication](authentication.md)
