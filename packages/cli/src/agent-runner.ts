@@ -286,6 +286,8 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
               })
               .catch(() => undefined);
           finished = ok && !stopped;
+          if (!ok && !stopped && !problem?.startsWith('Install'))
+            problem = `${run.title} failed · ${output.error ?? `see ${join(configDirectory(), 'logs', `worker-${run.taskId}.log`)}`}`;
         } catch (error) {
           problem = `${run.title} · ${message(error)}`;
         } finally {

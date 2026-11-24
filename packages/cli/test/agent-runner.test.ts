@@ -262,9 +262,11 @@ test('approved runs start this member’s worker with its model, report usage, a
   runner.update(state);
   await until(() => f.spawned.length === 2);
   assert.deepEqual(workspaces, [first, second]);
-  await runner.stop();
-  assert.equal(f.spawned[1]!.child.killed, true);
+  f.spawned[1]!.child.finish(1, '{"type":"turn.failed","error":{"message":"Model not supported."}}');
+  await until(() => transitions.length === 4);
   assert.deepEqual(transitions.slice(2), [`claim ${second}`, `release ${second}`]);
+  assert.match(runner.status() ?? '', /failed · Model not supported\.$/);
+  await runner.stop();
 });
 
 test('a member without Claude Code or Codex sees why agents are off', async (t) => {
