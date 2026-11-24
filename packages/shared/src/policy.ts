@@ -1,17 +1,16 @@
 import { z } from 'zod';
 
-// These are saved preferences for a future runner, not runtime permissions.
+// Allowed models are enforced on chat delegations. Token limit and control are saved preferences that seed chat settings.
 export const controlLevelSchema = z.enum(['manual', 'approve', 'automatic']);
 export const tokenLimitSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
+export const modelIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine((model) => !/\s|\0/.test(model), 'Model identifiers cannot contain whitespace or NUL');
 export const allowedModelsSchema = z
-  .array(
-    z
-      .string()
-      .trim()
-      .min(1)
-      .max(200)
-      .refine((model) => !/\s|\0/.test(model), 'Model identifiers cannot contain whitespace or NUL'),
-  )
+  .array(modelIdSchema)
   .min(1)
   .max(100)
   .refine((models) => new Set(models).size === models.length, 'Model identifiers must be unique')
@@ -29,7 +28,8 @@ export const memberPolicySchema = policySettingsSchema.extend({
   clanId: z.uuid(),
   userId: z.uuid(),
   revision: z.number().int().nonnegative(),
-  enforcement: z.literal('unavailable'),
+  // 'models': allowedModels is enforced before each chat delegation. Older servers report 'unavailable'.
+  enforcement: z.enum(['unavailable', 'models']),
 });
 export const updatePolicySchema = policySettingsSchema
   .partial()

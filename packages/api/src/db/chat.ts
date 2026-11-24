@@ -44,7 +44,8 @@ export const chatMembers = pgTable(
   ],
 );
 
-export type ChatProposal = { title: string; description: string; estimatedTokens: number };
+// Proposals saved before model limits have no model; treat them as the worker's default (null).
+export type ChatProposal = { title: string; description: string; estimatedTokens: number; model?: string | null };
 
 export const chatMessages = pgTable(
   'chat_messages',

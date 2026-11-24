@@ -78,7 +78,7 @@ test('PostgreSQL: only the member changes their policy; concurrent writes cannot
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }),
     });
-  const initial = { ...defaultPolicy, clanId: clan.id, userId: bob.user.id, revision: 0, enforcement: 'unavailable' };
+  const initial = { ...defaultPolicy, clanId: clan.id, userId: bob.user.id, revision: 0, enforcement: 'models' };
   assert.deepEqual(await (await call(bob.token)).json(), initial);
   assert.equal((await call(alice.token, undefined, other.id)).status, 404);
   assert.equal((await call(agent.token, undefined, other.id)).status, 404);

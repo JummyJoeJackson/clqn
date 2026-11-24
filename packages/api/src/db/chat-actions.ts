@@ -4,7 +4,7 @@ import { and, eq, lt, sql } from 'drizzle-orm';
 import { appendEvent, requireClan, type WorkspaceDb } from '../lib/access.js';
 import { type ChatProposal, chatMembers, chatMessages, chats, chatTokenHours } from './chat.js';
 import { chatUsage, currentChatHour, firstChatHour, memberScope, messageScope, workerBusy } from './chat-read.js';
-import { agents, credentials } from './schema.js';
+import { agents, credentials, memberships } from './schema.js';
 import { tasks } from './tasks.js';
 
 const missing = (what: string) => new ApiError(404, 'NOT_FOUND', `${what} not found`);
@@ -88,18 +88,34 @@ async function getWorker(db: WorkspaceDb, clanId: string, id: string) {
   return worker;
 }
 
+// The share lock waits for, and then blocks, a concurrent edit of the owner's policy until commit.
+async function allowedModels(db: WorkspaceDb, clanId: string, ownerId: string) {
+  const [owner] = await db
+    .select({ policy: memberships.agentPolicy })
+    .from(memberships)
+    .where(and(eq(memberships.clanId, clanId), eq(memberships.userId, ownerId)))
+    .for('share');
+  return owner?.policy?.allowedModels ?? null;
+}
+
 async function admission(
   db: WorkspaceDb,
   clanId: string,
   worker: Awaited<ReturnType<typeof getWorker>>,
-  estimate: number,
+  proposal: ChatProposal,
 ) {
   if (!worker.active) return 'The worker no longer has an active credential';
   const [owner] = await db.select().from(chatMembers).where(memberScope(clanId, worker.ownerId));
   if (!owner) return 'The worker owner must join the chat first';
+  const models = await allowedModels(db, clanId, worker.ownerId);
+  if (models && !models.includes(proposal.model ?? ''))
+    return `This delegation's model is not in your allowed models (${models.join(', ')})`;
   const { settings } = owner;
   const { tokens, reserved, agents: inUse } = await chatUsage(db, clanId, worker.ownerId);
-  if (settings.tokenLimit !== null && tokens + reserved + BigInt(estimate) > BigInt(settings.tokenLimit))
+  if (
+    settings.tokenLimit !== null &&
+    tokens + reserved + BigInt(proposal.estimatedTokens) > BigInt(settings.tokenLimit)
+  )
     return 'This delegation would exceed your token limit';
   if (settings.agentLimit !== null && inUse >= settings.agentLimit)
     return 'This delegation would exceed your agent limit';
@@ -138,7 +154,20 @@ export async function decideChat(db: WorkspaceDb, actor: Actor, clanId: string, 
     if (related && !held) throw conflict('That clarification has already been resolved');
     const worker = await getWorker(db, clanId, body.workerId);
     if (!worker.active) throw conflict('Choose a worker with an active credential');
-    const proposal = { title: body.title, description: body.description, estimatedTokens: body.estimatedTokens };
+    const models = await allowedModels(db, clanId, worker.ownerId);
+    const model = body.model ?? models?.[0] ?? null;
+    if (models && !models.includes(model!))
+      throw new ApiError(
+        409,
+        'MODEL_NOT_ALLOWED',
+        `The worker's owner allows only these models: ${models.join(', ')}. Choose one of them or another worker.`,
+      );
+    const proposal: ChatProposal = {
+      title: body.title,
+      description: body.description,
+      estimatedTokens: body.estimatedTokens,
+      model,
+    };
     await db
       .update(chatMessages)
       .set({ status: 'approval', workerId: worker.id, proposal })
@@ -146,9 +175,7 @@ export async function decideChat(db: WorkspaceDb, actor: Actor, clanId: string, 
     if (held) await setStatus(db, held.id, 'handled');
     const [owner] = await db.select().from(chatMembers).where(memberScope(clanId, worker.ownerId));
     const blocker =
-      owner?.settings.approval === 'automatic'
-        ? await admission(db, clanId, worker, proposal.estimatedTokens)
-        : undefined;
+      owner?.settings.approval === 'automatic' ? await admission(db, clanId, worker, proposal) : undefined;
     if (blocker === null) await assignChatTask(db, actor, clanId, id, worker.id, proposal);
     return { status: blocker === null ? 'handled' : 'approval', blocker: blocker ?? null };
   }
@@ -203,7 +230,7 @@ export async function approveChat(db: WorkspaceDb, actor: Actor, clanId: string,
     return chatAcknowledged;
   if (message.status !== 'approval') throw conflict('This proposal is no longer awaiting approval');
   if (approve) {
-    const reason = await admission(db, clanId, worker, message.proposal.estimatedTokens);
+    const reason = await admission(db, clanId, worker, message.proposal);
     if (reason) throw new ApiError(409, 'LIMIT_REACHED', reason);
     await assignChatTask(db, actor, clanId, id, worker.id, message.proposal);
   } else {

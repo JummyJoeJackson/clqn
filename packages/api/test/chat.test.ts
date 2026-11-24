@@ -194,4 +194,53 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
   assert.equal((await request(worker.token, `/tasks/${queuedTask}/claim`, {})).status, 409);
   assert.deepEqual((await state(member.token)).usage, { tokens: 20, reserved: 0, agents: 0 });
   assert.equal((await approve(member.token, tooLarge, false)).status, 200);
+
+  // Model limits come from the worker owner's policy and are rechecked when the owner approves.
+  assert.equal((await chat(member.token, '/join', { ...defaultChatSettings, tokenLimit: null })).status, 200);
+  const policy = (allowedModels: string[] | null, expectedRevision: number) =>
+    request(member.token, '/policy', { allowedModels, expectedRevision });
+  assert.equal((await policy(['model-a', 'model-b'], 0)).status, 200);
+  const modelTask = (msg: SendChat, workerId: string, model?: string) =>
+    decision(msg, { action: 'delegate', title: msg.text, description: msg.text, workerId, estimatedTokens: 5, model });
+  const first = await send(member.token, 'Use the default model');
+  const disallowed = await modelTask(first, worker.agent.id, 'model-c');
+  assert.equal(disallowed.status, 409);
+  const error = (await disallowed.json()) as { error: { code: string; message: string } };
+  assert.equal(error.error.code, 'MODEL_NOT_ALLOWED');
+  assert.match(error.error.message, /model-a, model-b/);
+  assert.equal((await state(member.token)).messages.find(({ id }) => id === first.id)?.status, 'queued');
+  assert.equal(
+    (await chat(member.token, `/messages/${first.id}/decision`, { action: 'reply', text: 'x' })).status,
+    403,
+  );
+  assert.equal(
+    (await chat(worker.token, `/messages/${first.id}/decision`, { action: 'reply', text: 'x' })).status,
+    403,
+  );
+  assert.equal((await modelTask(first, worker.agent.id)).status, 200);
+  const second = await send(member.token, 'Use model b');
+  assert.equal((await modelTask(second, secondWorker.agent.id, 'model-b')).status, 200);
+  const ours = (approvals: ChatState['approvals'], ids: string[]) =>
+    approvals.filter(({ messageId }) => ids.includes(messageId)).map(({ messageId, model }) => [messageId, model]);
+  assert.deepEqual(ours((await state(member.token)).approvals, [first.id, second.id]), [
+    [first.id, 'model-a'],
+    [second.id, 'model-b'],
+  ]);
+  assert.equal((await policy(['model-b'], 1)).status, 200);
+  const revoked = await approve(member.token, first);
+  assert.equal(revoked.status, 409);
+  assert.match(await revoked.text(), /not in your allowed models \(model-b\)/);
+  assert.equal((await approve(member.token, second)).status, 200);
+  assert.equal((await state(member.token)).runs.find(({ messageId }) => messageId === second.id)?.model, 'model-b');
+  assert.equal((await approve(member.token, first, false)).status, 200);
+
+  assert.equal((await policy(null, 2)).status, 200);
+  const anyModel = await send(member.token, 'Any model works');
+  assert.equal((await modelTask(anyModel, worker.agent.id, 'vendor/new-model')).status, 200);
+  const defaultModel = await send(member.token, 'No model chosen');
+  assert.equal((await modelTask(defaultModel, worker.agent.id)).status, 200);
+  assert.deepEqual(ours((await state(member.token)).approvals, [anyModel.id, defaultModel.id]), [
+    [anyModel.id, 'vendor/new-model'],
+    [defaultModel.id, null],
+  ]);
 });

@@ -66,7 +66,7 @@ test('MCP reads the owner policy without exposing policy mutation', async (t) =>
     tokenLimit: 1000,
     allowedModels: ['provider/model'],
     control: 'approve' as const,
-    enforcement: 'unavailable' as const,
+    enforcement: 'models' as const,
   };
   const server = createMcpServer(
     stub({

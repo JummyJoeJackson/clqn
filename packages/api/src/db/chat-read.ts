@@ -166,6 +166,7 @@ export async function chatActivity(db: WorkspaceDb, clanId: string, userId: stri
     title: row.proposal!.title,
     worker: row.worker,
     estimatedTokens: row.proposal!.estimatedTokens,
+    model: row.proposal!.model ?? null,
     taskId: row.taskId,
     status:
       row.taskStatus === 'completed'
@@ -186,6 +187,7 @@ export async function chatActivity(db: WorkspaceDb, clanId: string, userId: stri
       ...row,
       title: proposal!.title,
       estimatedTokens: proposal!.estimatedTokens,
+      model: proposal!.model ?? null,
     })),
   };
 }

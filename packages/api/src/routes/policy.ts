@@ -16,7 +16,7 @@ export function createPolicyRoutes(db: WorkspaceDb) {
       clanId,
       userId: actor.id,
       revision: membership.policyRevision,
-      enforcement: 'unavailable' as const,
+      enforcement: 'models' as const,
     });
   });
   app.post(
@@ -52,7 +52,7 @@ export function createPolicyRoutes(db: WorkspaceDb) {
           .set({ agentPolicy: settings, policyRevision: revision })
           .where(and(eq(memberships.clanId, clanId), eq(memberships.userId, actor.id)));
         await appendEvent(tx, { clanId, actorId: actor.id, type: 'policy.updated', resourceId: actor.id });
-        return { ...settings, clanId, userId: actor.id, revision, enforcement: 'unavailable' as const };
+        return { ...settings, clanId, userId: actor.id, revision, enforcement: 'models' as const };
       });
       return c.json(policy);
     },

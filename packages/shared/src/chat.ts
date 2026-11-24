@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tokenLimitSchema } from './policy.js';
+import { modelIdSchema, tokenLimitSchema } from './policy.js';
 
 export const chatSettingsSchema = z
   .object({
@@ -36,6 +36,8 @@ export const chatDecisionSchema = z.discriminatedUnion('action', [
       description: chatText,
       workerId: z.uuid(),
       estimatedTokens: tokenCount.min(1),
+      // Must be one of the worker owner's allowed models. Defaults to their first allowed model, or none if any is allowed.
+      model: modelIdSchema.optional(),
     })
     .strict(),
 ]);
@@ -63,6 +65,8 @@ export const chatProposalSchema = z.object({
   title: z.string(),
   worker: z.string(),
   estimatedTokens: tokenCount,
+  // Null means the worker's default model. Older servers omit it.
+  model: z.string().nullable().optional(),
 });
 export const chatRunSchema = chatProposalSchema.extend({
   taskId: z.uuid(),
