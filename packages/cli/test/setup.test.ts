@@ -8,7 +8,7 @@ import { basename, join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { ClqnClient } from '@clqn/shared';
 import { readConfig, readServer, writeConfig } from '../src/config.js';
-import { chooseClan, signIn, signOut } from '../src/setup.js';
+import { chooseClan, savedClan, signIn, signOut } from '../src/setup.js';
 
 type Handler = (request: IncomingMessage, body: unknown, response: ServerResponse) => void;
 
@@ -124,6 +124,23 @@ test('choosing a clan opens an existing one, creates one, or reports no invitati
   assert.deepEqual(await chooseClan({ server: f.url, connect, canSignIn: true, ...create }), created);
   assert.match(create.printed.join('\n'), /No pending invitations\. Ask a clan leader to invite me@example\.com\./);
   assert.match(create.questions.at(-1)!, /^Clan name \(/);
+});
+
+test('a saved clan the user no longer belongs to is forgotten so setup asks again', async (t) => {
+  const userId = randomUUID();
+  const kept = { id: randomUUID(), name: 'Kept', createdBy: userId, createdAt: new Date().toISOString() };
+  const token = `clqn_${'k'.repeat(43)}`;
+  const f = await fixture(t, (request, _body, response) => {
+    if (request.url === '/v1/clans') response.end(JSON.stringify({ clans: [kept] }));
+    else response.writeHead(404).end();
+  });
+  const api = new ClqnClient(f.url, token);
+  assert.equal(await savedClan(f.url, api), undefined);
+  await writeConfig(f.url, { token, clanId: kept.id });
+  assert.equal(await savedClan(f.url, api), kept.id);
+  await writeConfig(f.url, { token, clanId: randomUUID() });
+  assert.equal(await savedClan(f.url, api), undefined);
+  assert.deepEqual(await readConfig(f.url), { token });
 });
 
 test('joining a clan accepts the chosen invitation and refreshes a stale GitHub sign-in', async (t) => {

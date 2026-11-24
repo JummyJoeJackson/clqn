@@ -44,6 +44,15 @@ export async function signOut(server: string) {
     .join(' ');
 }
 
+// The saved clan, unless the user has left it, was removed, or it was deleted; then forget it so setup asks again.
+export async function savedClan(server: string, api: ClqnClient): Promise<string | undefined> {
+  const config = await readConfig(server);
+  if (!config.clanId) return undefined;
+  if ((await api.listClans()).clans.some((clan) => clan.id === config.clanId)) return config.clanId;
+  await writeConfig(server, config.token ? { token: config.token } : {});
+  return undefined;
+}
+
 export async function selectClan(server: string, clanId: string) {
   await writeConfig(server, { ...(await readConfig(server)), clanId });
 }
