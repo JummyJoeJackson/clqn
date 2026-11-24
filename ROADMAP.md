@@ -38,7 +38,8 @@ Each member sets their own:
 ## What's next
 
 1. **`main` sync in the chat screen.** Link the repo during setup, and keep `main` synced while `clqn` is open.
-2. **Update documentation (README - concise, user focused), website**
+2. **Choose your agents.** An "Agents" row in settings (F2) lists the agent CLIs installed on your machine (Claude Code, Codex), each on or off; all installed ones start on. Each one that's on is a worker the orchestrator can pick, within your allowed models. If none is installed, the chat says so. Replaces `CLQN_RUNTIME`.
+3. **Update documentation (README - concise, user focused), website**
 
 ## Later
 
