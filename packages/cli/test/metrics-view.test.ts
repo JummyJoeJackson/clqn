@@ -65,7 +65,7 @@ test('area charts scale to the width and keep the peak', () => {
   );
 });
 
-test('chat screen offers F5 metrics, drops the token graph, and settings fit 12 rows', () => {
+test('chat screen offers Ctrl+G metrics, drops the token graph, and settings fit 12 rows', () => {
   const state = {
     session: { clan: 'Docs', host: 'ana@example.com' },
     settings: { approval: 'manual', tokenLimit: 5000, agentLimit: 2, allowedModels: ['model-a', 'model-b'] },
@@ -95,7 +95,7 @@ test('chat screen offers F5 metrics, drops the token graph, and settings fit 12 
     approvalFocused: false,
   };
   const chat = chatFrame(base).lines.join('\n');
-  assert.match(chat, /F5 Metrics/);
+  assert.match(chat, /Ctrl\+G Metrics/);
   assert.doesNotMatch(chat, /Clan tokens/);
   const settings = chatFrame({
     ...base,

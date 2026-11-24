@@ -227,7 +227,7 @@ export function chatFrame(view: View): Frame {
   const pending = state?.approvals[view.approval];
   const question = view.reply ?? state?.questions[0];
   const count = state?.approvals.length ?? 0;
-  const approvalKey = view.approvalFocused ? '› y/n' : '◆ F3';
+  const approvalKey = view.approvalFocused ? '› y/n' : '◆ Ctrl+P';
   const approvalPrefix = `${approvalKey}  Spawn · `;
   const approvalSuffix = pending
     ? `${pending.model ? ` · ${plain(pending.model)}` : ''} · ${number(pending.estimatedTokens)} est.${count > 1 ? `  (${view.approval + 1}/${count})` : ''}`
@@ -243,7 +243,7 @@ export function chatFrame(view: View): Frame {
         )
       : '',
     question
-      ? paint(clip(`${view.reply ? '› Replying' : '? F4 Reply'}  ${plain(question.text)}`, content), 'warning')
+      ? paint(clip(`${view.reply ? '› Replying' : '? Ctrl+Q Reply'}  ${plain(question.text)}`, content), 'warning')
       : '',
     notice,
   ].filter(Boolean);
@@ -293,10 +293,10 @@ export function chatFrame(view: View): Frame {
     );
   } else lines.push('');
   const actions = [
-    'F2 Settings',
-    pending ? (view.approvalFocused ? '↑↓ Choose  Y Approve  N Decline  Esc Back' : 'F3 Approvals') : '',
-    question ? 'F4 Reply' : '',
-    'F5 Metrics',
+    'Ctrl+S Settings',
+    pending ? (view.approvalFocused ? '↑↓ Choose  Y Approve  N Decline  Esc Back' : 'Ctrl+P Approvals') : '',
+    question ? 'Ctrl+Q Reply' : '',
+    'Ctrl+G Metrics',
     view.messages.length > 3 || view.hasOlder ? 'PgUp History' : '',
     'Ctrl+C Quit',
   ].filter(Boolean);

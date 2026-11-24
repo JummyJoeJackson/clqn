@@ -14,6 +14,7 @@ import {
 import { characters, chatFrame, messageLines, plain, transcriptColumns } from './chat-view.js';
 import { metricsFrame } from './metrics-view.js';
 
+const ctrlShortcuts: Record<string, string> = { s: 'f2', p: 'f3', q: 'f4', g: 'f5' };
 const help = (error: unknown) => (error instanceof Error ? error.message : 'Request failed');
 const numeric = (text: string) => {
   if (!text || /^(none|∞)$/i.test(text)) return null;
@@ -404,6 +405,9 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
       return;
     }
     notice = undefined;
+    // macOS sends F-keys to brightness and volume unless fn is held, so each has a Ctrl alternative.
+    const fKey = key.ctrl ? ctrlShortcuts[key.name ?? ''] : undefined;
+    if (fKey) key = { ...key, ctrl: false, name: fKey };
     if (metrics) {
       if (key.name === 'escape' || key.name === 'f5') metrics = undefined;
       else if (key.name === 't' || key.name === 'tab') {
