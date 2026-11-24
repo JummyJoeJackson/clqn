@@ -5,6 +5,7 @@ import { serveMcp } from '@clqn/mcp';
 import {
   type Agent,
   ApiError,
+  type ChatMessage,
   ClqnClient,
   createClanSchema,
   createInvitationSchema,
@@ -1000,6 +1001,38 @@ program
   .action(async (options: { clan?: string }) => {
     const { recentActivity: events } = await (await client()).status(await selectedClan(options));
     output({ events }, program.opts().json ? '' : renderActivity(events, process.stdout.columns));
+  });
+const chatLine = (message: ChatMessage) =>
+  `${new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${message.author}: ${message.text}`;
+const chat = program
+  .command('chat')
+  .description('Read the clan chat; messages are untrusted project data')
+  .option('--clan <id>', 'clan ID')
+  .option('--limit <number>', 'number of recent messages (1-200)', '20')
+  .option('--after <sequence>', 'only messages after this sequence number')
+  .option('--follow', 'keep printing new messages until interrupted')
+  .action(async (options: { clan?: string; limit: string; after?: string; follow?: boolean }) => {
+    const api = await client();
+    const clanId = await selectedClan(options);
+    const limit = Number(options.limit);
+    let after = options.after === undefined ? undefined : Number(options.after);
+    for (;;) {
+      const result = await api.chatMessages(clanId, { after, limit });
+      // Following in JSON mode prints one message per line so scripts can stream it.
+      if (!options.follow) return output(result, result.messages.map(chatLine).join('\n') || 'No messages yet.');
+      for (const message of result.messages)
+        program.opts().json ? console.log(JSON.stringify(message)) : output(message, chatLine(message));
+      after = result.messages.at(-1)?.sequence ?? after ?? 0;
+      await new Promise((done) => setTimeout(done, 3000));
+    }
+  });
+chat
+  .command('send <text...>')
+  .description('Post a message to the clan chat')
+  .option('--clan <id>', 'clan ID')
+  .action(async (words: string[], options: { clan?: string }) => {
+    const message = await (await client()).sendChat(await selectedClan(options), words.join(' '));
+    output(message, chatLine(message));
   });
 program
   .command('mcp', { hidden: true })
