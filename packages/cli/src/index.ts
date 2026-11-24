@@ -33,6 +33,7 @@ import {
 import {
   type Config,
   hostedServer,
+  legacyLocalServer,
   preferredServer,
   readConfig,
   removeConfig,
@@ -78,7 +79,9 @@ const program = new Command()
       return;
     }
     if (command.name() === 'login') return;
-    serverUrl = configuredServer() ?? (await preferredServer());
+    // Avoid sending a legacy local credential to a remembered or hosted server.
+    serverUrl =
+      configuredServer() ?? (process.env.CLQN_TOKEN === undefined ? await preferredServer() : legacyLocalServer);
   });
 
 const configuredServer = () => program.opts<{ apiUrl?: string }>().apiUrl ?? process.env.CLQN_API_URL;
@@ -97,8 +100,12 @@ const saveToken = async (token: string, scopedClan?: string) => {
 };
 const client = async () =>
   new ClqnClient(apiUrl(), sessionProfile?.token ?? process.env.CLQN_TOKEN ?? (await readConfig(apiUrl())).token);
-const signInWithGithub = async () => {
+const signInWithGithub = async (expectedUserId?: string) => {
   const { token, user } = await githubLogin(apiUrl(), Boolean(program.opts().json));
+  if (expectedUserId !== undefined && user.id !== expectedUserId) {
+    await new ClqnClient(apiUrl(), token).logout().catch(() => undefined);
+    throw new Error('Retry with the GitHub account that received the invitation. Use clqn login to switch accounts.');
+  }
   await saveToken(token);
   return user;
 };
@@ -202,7 +209,7 @@ program
     const github = options.github === true || process.stdin.isTTY === true;
     if (options.server !== undefined && program.opts().apiUrl !== undefined)
       throw new Error('Use one server option for sign-in, either --server or --api-url');
-    serverUrl = await loginServer(options.server ?? configuredServer());
+    serverUrl = await loginServer(options.server ?? configuredServer(), github);
     if (github) {
       const user = await signInWithGithub();
       output(user, `Logged in as ${user.email}`);
@@ -316,6 +323,27 @@ program
     output(clan, `Using ${clan.name}.`);
   });
 
+async function joinPendingInvitation(api: ClqnClient, name: string | undefined, list: boolean | undefined) {
+  const { invitations } = await api.listInvitations();
+  if (list || (name === undefined && invitations.length !== 1)) {
+    const lines = invitations.map((invitation) => invitation.clanName).join('\n');
+    output(
+      { invitations },
+      lines
+        ? `Pending invitations:\n${lines}\n\nTo accept one, run clqn join "<clan name>".`
+        : 'No pending invitations. Ask your teammate to invite the email you signed in with.',
+    );
+    return;
+  }
+  const byId = invitations.find((invitation) => invitation.clanId === name);
+  const byName = invitations.filter((invitation) => invitation.clanName.toLowerCase() === name?.toLowerCase());
+  if (!byId && byName.length > 1)
+    throw new Error('Several pending invitations have that name. Run clqn join --list --json and use the clan ID.');
+  const invitation = name === undefined ? invitations[0] : (byId ?? byName[0]);
+  if (!invitation) throw new Error('No pending invitation for that clan. Run clqn join --list.');
+  return api.acceptInvitation(invitation.clanId);
+}
+
 program
   .command('join [clan]')
   .description('Accept a pending clan invitation for your signed-in email')
@@ -327,31 +355,30 @@ program
     const name = clanName === undefined ? undefined : createClanSchema.parse({ name: clanName }).name;
     await ensureSetupLogin();
     const api = await client();
-    const config = await readConfig(apiUrl());
     const code = invitationCodeSchema.safeParse(name);
-    let clan: Awaited<ReturnType<ClqnClient['joinClan']>>;
+    let clan: Awaited<ReturnType<typeof joinPendingInvitation>>;
     if (!options.list && code.success) {
       clan = await api.joinClan(code.data);
     } else {
-      const { invitations } = await api.listInvitations();
-      if (options.list || (name === undefined && invitations.length !== 1)) {
-        const lines = invitations.map((invitation) => invitation.clanName).join('\n');
-        output(
-          { invitations },
-          lines
-            ? `Pending invitations:\n${lines}\n\nTo accept one, run clqn join "<clan name>".`
-            : 'No pending invitations. Ask your teammate to invite the email you signed in with.',
-        );
-        return;
+      try {
+        clan = await joinPendingInvitation(api, name, options.list);
+      } catch (error) {
+        if (
+          !(error instanceof ApiError) ||
+          error.code !== 'INVITATION_LOGIN_REQUIRED' ||
+          !process.stdin.isTTY ||
+          sessionProfile ||
+          process.env.CLQN_TOKEN !== undefined
+        )
+          throw error;
+        const user = await api.whoami();
+        console.error('Verify your GitHub email to continue.');
+        await signInWithGithub(user.id);
+        clan = await joinPendingInvitation(await client(), name, options.list);
       }
-      const byId = invitations.find((invitation) => invitation.clanId === name);
-      const byName = invitations.filter((invitation) => invitation.clanName.toLowerCase() === name?.toLowerCase());
-      if (!byId && byName.length > 1)
-        throw new Error('Several pending invitations have that name. Run clqn join --list --json and use the clan ID.');
-      const invitation = name === undefined ? invitations[0] : (byId ?? byName[0]);
-      if (!invitation) throw new Error('No pending invitation for that clan. Run clqn join --list.');
-      clan = await api.acceptInvitation(invitation.clanId);
     }
+    if (!clan) return;
+    const config = await readConfig(apiUrl());
     await writeConfig(apiUrl(), { ...config, clanId: clan.id });
     const joined = `Joined and selected ${clan.name}.`;
     output(clan, runtime ? joined : `${joined}\nRun clqn agent run to open your agent.`);
@@ -542,9 +569,11 @@ agent
         registration.alias,
       );
       await rememberAgent(result, options.runtime);
-      // Aliases and IDs never need shell quoting.
       const clan = options.clan ? ` --clan ${result.agent.clanId}` : '';
-      const launch = `clqn agent run ${result.agent.alias ?? result.agent.id}${clan}`;
+      const savedName = result.agent.name;
+      const reference =
+        result.agent.alias ?? `${savedName.startsWith('-') ? '-- ' : ''}'${savedName.replaceAll("'", "'\\''")}'`;
+      const launch = `clqn agent run${clan} ${reference}`;
       const added = `Registered ${agentLabel(result.agent)} as a ${result.agent.role}.`;
       output(
         options.showToken ? result : { agent: agentSummary(result.agent) },

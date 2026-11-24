@@ -9,6 +9,7 @@ export interface Config {
 }
 
 export const hostedServer = 'https://clqn-api-660379279615.us-central1.run.app';
+export const legacyLocalServer = 'http://127.0.0.1:3000';
 
 export function serverOrigin(address: string): string {
   let url: URL;
@@ -98,5 +99,9 @@ export function writeServer(apiUrl: string): Promise<void> {
 }
 
 export async function preferredServer(): Promise<string> {
-  return (await readServer()) ?? hostedServer;
+  const remembered = await readServer();
+  if (remembered) return remembered;
+  // Keep sessions created before clqn saved a server selection.
+  const local = await readConfig(legacyLocalServer);
+  return local.token ? legacyLocalServer : hostedServer;
 }

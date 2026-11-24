@@ -346,3 +346,24 @@ test('login --server saves the origin for later commands and accepts provisionin
   const who = await f.call(['whoami', '--json'], { useSavedServer: true });
   assert.deepEqual(JSON.parse(who.stdout), f.user);
 });
+
+test('implicit environment and piped credentials stay on loopback even after remembering a different server', async (t) => {
+  const f = await workspaceFixture(t);
+  await f.call(['login'], { input: f.token });
+  const fetchProbe = `data:text/javascript,${encodeURIComponent(`
+    globalThis.fetch = async (url, options) => {
+      if (url.href !== 'http://127.0.0.1:3000/v1/me' || options.headers.authorization !== 'Bearer fixture_token')
+        throw new Error('Unexpected credential destination');
+      return new Response(${JSON.stringify(JSON.stringify(f.user))});
+    };
+  `)}`;
+  const nodeArgs = [...sourceNodeArgs, '--import', fetchProbe, cli, '--json'];
+  const env = { ...process.env, CLQN_CONFIG_DIR: f.directory, CLQN_API_URL: undefined, CLQN_AGENT_PROFILE: undefined };
+  const fromEnv = await run(process.execPath, [...nodeArgs, 'whoami'], {
+    env: { ...env, CLQN_TOKEN: 'fixture_token' },
+  });
+  assert.deepEqual(JSON.parse(fromEnv.stdout), f.user);
+  const fromPipe = run(process.execPath, [...nodeArgs, 'login'], { env: { ...env, CLQN_TOKEN: undefined } });
+  fromPipe.child.stdin?.end('fixture_token');
+  assert.deepEqual(JSON.parse((await fromPipe).stdout), f.user);
+});

@@ -13,6 +13,8 @@ test('terminal links have a copyable URL label and piped output stays plain', (t
   const text = `Pull request\n${url}`;
   assert.equal(terminalText(text, false), text);
   assert.equal(terminalText(text, true), `Pull request\n\x1b]8;;${url}\x1b\\${url}\x1b]8;;\x1b\\`);
+  const credentialUrl = 'https://user:password@example.com/path';
+  assert.equal(terminalText(credentialUrl, true), credentialUrl);
   process.env.TERM = 'dumb';
   assert.equal(terminalText(text, true), text);
 });
