@@ -102,3 +102,34 @@ export const chatInboxSchema = chatHistorySchema.extend({
   queued: z.array(chatMessageSchema),
   held: z.array(chatMessageSchema),
 });
+
+// 24h uses hourly buckets; 7d uses 6-hour buckets. The last bucket holds the current hour.
+export const chatMetricsWindows = {
+  '24h': { buckets: 24, bucketHours: 1 },
+  '7d': { buckets: 28, bucketHours: 6 },
+} as const;
+export const chatMetricsWindowSchema = z.enum(['24h', '7d']);
+export type ChatMetricsWindow = z.infer<typeof chatMetricsWindowSchema>;
+const seconds = z.number().nonnegative();
+export const chatMetricsSchema = z.object({
+  window: chatMetricsWindowSchema,
+  bucketHours: z.number().int().positive(),
+  start: z.iso.datetime({ offset: true }),
+  // Per bucket: reported tokens, agents running at any point, and average queue wait of messages sent then.
+  tokens: z.array(tokenCount),
+  agents: z.array(z.number().int().nonnegative()),
+  queueWait: z.array(seconds.nullable()),
+  queue: z.object({
+    averageSeconds: seconds.nullable(),
+    longestSeconds: seconds.nullable(),
+    waiting: z.number().int().nonnegative(),
+    oldestSeconds: seconds.nullable(),
+  }),
+  // Lifetime usage, the same total each member's token limit is enforced against.
+  members: z.array(
+    z.object({ name: z.string(), tokens: tokenCount, reserved: tokenCount, tokenLimit: tokenCount.nullable() }),
+  ),
+  // Delegations sent in the window, plus any still active.
+  tasks: z.array(chatRunSchema.omit({ messageId: true, taskId: true, model: true })),
+});
+export type ChatMetrics = z.infer<typeof chatMetricsSchema>;

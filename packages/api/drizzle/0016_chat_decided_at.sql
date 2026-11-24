@@ -1,0 +1,1 @@
+ALTER TABLE "chat_messages" ADD COLUMN "decided_at" timestamp with time zone;

@@ -26,6 +26,7 @@ import {
 import { setAliasSchema } from './aliases.js';
 import {
   type ChatDecision,
+  type ChatMetricsWindow,
   type ChatSettings,
   type ChatUsage,
   chatDecisionSchema,
@@ -34,6 +35,7 @@ import {
   chatInfoSchema,
   chatMessageSchema,
   chatMessageStatusSchema,
+  chatMetricsSchema,
   chatSettingsSchema,
   chatStateSchema,
   chatUsageSchema,
@@ -253,6 +255,9 @@ export class ClqnClient {
       z.object({ status: chatMessageStatusSchema, blocker: z.string().nullable() }),
       chatDecisionSchema.parse(decision),
     );
+  }
+  chatMetrics(clanId: string, window: ChatMetricsWindow, signal?: AbortSignal) {
+    return this.request(`${this.chatPath(clanId)}/metrics?window=${window}`, chatMetricsSchema, undefined, signal);
   }
   approveChat(clanId: string, id: string, approve: boolean, signal?: AbortSignal) {
     return this.request(

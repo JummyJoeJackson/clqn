@@ -3,7 +3,7 @@ import { type Actor, ApiError, type ChatDecision, type ChatUsage, type SendChat 
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { appendEvent, requireClan, type WorkspaceDb } from '../lib/access.js';
 import { type ChatProposal, chatMembers, chatMessages, chats, chatTokenHours } from './chat.js';
-import { chatUsage, currentChatHour, firstChatHour, memberScope, messageScope, workerBusy } from './chat-read.js';
+import { chatTokenRetention, chatUsage, currentChatHour, memberScope, messageScope, workerBusy } from './chat-read.js';
 import { agents, credentials, memberships } from './schema.js';
 import { tasks } from './tasks.js';
 
@@ -127,6 +127,14 @@ async function setStatus(db: WorkspaceDb, id: string, status: typeof chatMessage
   await db.update(chatMessages).set({ status }).where(eq(chatMessages.id, id));
 }
 
+// Records when a message first left the queue, for queue wait metrics.
+async function markDecided(db: WorkspaceDb, id: string) {
+  await db
+    .update(chatMessages)
+    .set({ decidedAt: sql`coalesce(${chatMessages.decidedAt}, clock_timestamp())` })
+    .where(eq(chatMessages.id, id));
+}
+
 async function assignChatTask(
   db: WorkspaceDb,
   actor: Actor,
@@ -148,6 +156,7 @@ async function assignChatTask(
 export async function decideChat(db: WorkspaceDb, actor: Actor, clanId: string, id: string, body: ChatDecision) {
   const message = await getMessage(db, clanId, id);
   if (message.status !== 'queued') throw conflict('This message has already been handled');
+  await markDecided(db, id);
   const related = message.replyTo ? await getMessage(db, clanId, message.replyTo) : undefined;
   const held = related?.status === 'clarification' ? related : undefined;
   if (body.action === 'delegate') {
@@ -200,6 +209,7 @@ export async function decideChat(db: WorkspaceDb, actor: Actor, clanId: string, 
     } else if (!['queued', 'clarification', 'approval'].includes(work.status)) {
       throw conflict('Only queued or waiting work can be held');
     }
+    if (work.status === 'queued') await markDecided(db, work.id);
     await setStatus(db, work.id, 'clarification');
     if (work.id !== message.id) await setStatus(db, message.id, 'handled');
   } else {
@@ -264,7 +274,7 @@ export async function reportChat(db: WorkspaceDb, actor: Actor, clanId: string, 
       });
     await db
       .delete(chatTokenHours)
-      .where(and(eq(chatTokenHours.clanId, clanId), lt(chatTokenHours.hour, firstChatHour)));
+      .where(and(eq(chatTokenHours.clanId, clanId), lt(chatTokenHours.hour, chatTokenRetention)));
   }
   if (usage.result) {
     await addChatMessage(db, {

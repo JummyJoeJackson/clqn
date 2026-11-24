@@ -70,7 +70,10 @@ export async function chatQueue(db: WorkspaceDb, clanId: string, status: 'queued
   ).map(messageView);
 }
 
-const activeRun = and(eq(tasks.assignedAgentId, chatMessages.workerId), inArray(tasks.status, ['open', 'claimed']));
+export const activeRun = and(
+  eq(tasks.assignedAgentId, chatMessages.workerId),
+  inArray(tasks.status, ['open', 'claimed']),
+);
 
 export async function chatUsage(db: WorkspaceDb, clanId: string, userId: string) {
   const [usage] = await db
@@ -92,6 +95,8 @@ export async function chatUsage(db: WorkspaceDb, clanId: string, userId: string)
 
 export const currentChatHour = sql`date_trunc('hour', statement_timestamp(), 'UTC')`;
 export const firstChatHour = sql`${currentChatHour} - ${chatTokenHistoryHours - 1}::integer * interval '1 hour'`;
+// Keep a week of hourly token reports for the metrics tab.
+export const chatTokenRetention = sql`${currentChatHour} - ${7 * 24 - 1}::integer * interval '1 hour'`;
 
 export async function chatTokenHistory(db: WorkspaceDb, clanId: string) {
   const rows = await db.execute<{ tokens: string }>(sql`
@@ -112,6 +117,15 @@ export async function workerBusy(db: WorkspaceDb, clanId: string, workerId: stri
     .limit(1);
   return Boolean(busy);
 }
+
+export const runStatus = (row: { taskStatus: string; assigned: string | null; workerId: string }): ChatRun['status'] =>
+  row.taskStatus === 'completed'
+    ? 'done'
+    : row.assigned !== row.workerId
+      ? 'released'
+      : row.taskStatus === 'claimed'
+        ? 'running'
+        : 'queued';
 
 export async function chatActivity(db: WorkspaceDb, clanId: string, userId: string) {
   const [rows, approvals, [queue], [running], questions] = await Promise.all([
@@ -168,14 +182,7 @@ export async function chatActivity(db: WorkspaceDb, clanId: string, userId: stri
     estimatedTokens: row.proposal!.estimatedTokens,
     model: row.proposal!.model ?? null,
     taskId: row.taskId,
-    status:
-      row.taskStatus === 'completed'
-        ? 'done'
-        : row.assigned !== row.workerId
-          ? 'released'
-          : row.taskStatus === 'claimed'
-            ? 'running'
-            : 'queued',
+    status: runStatus(row),
     tokens: row.tokens,
   }));
   return {

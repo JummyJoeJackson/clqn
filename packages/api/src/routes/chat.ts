@@ -3,6 +3,7 @@ import {
   ApiError,
   chatApprovalSchema,
   chatDecisionSchema,
+  chatMetricsWindowSchema,
   chatSettingsSchema,
   chatUsageSchema,
   defaultChatSettings,
@@ -21,6 +22,7 @@ import {
   requireOrchestrator,
   sendChat,
 } from '../db/chat-actions.js';
+import { chatMetrics } from '../db/chat-metrics.js';
 import {
   chatActivity,
   chatHistory,
@@ -122,6 +124,16 @@ export function createChatRoutes(db: WorkspaceDb) {
     const before = z.coerce.number().int().positive().safeParse(c.req.query('before'));
     if (!before.success) throw new ApiError(400, 'INVALID_REQUEST', 'Provide a valid chat cursor');
     return c.json(await chatHistory(db, clanId, before.data));
+  });
+  app.get('/metrics', async (c) => {
+    const actor = c.get('user');
+    const clanId = c.req.param('clanId')!;
+    requirePersonal(actor);
+    await requireClan(db, actor, clanId);
+    await requireChatMember(db, clanId, actor.id);
+    const window = chatMetricsWindowSchema.safeParse(c.req.query('window') ?? '24h');
+    if (!window.success) throw new ApiError(400, 'INVALID_REQUEST', 'Choose a 24h or 7d window');
+    return c.json(await chatMetrics(db, clanId, window.data));
   });
   app.post('/messages', async (c) => {
     const actor = c.get('user');

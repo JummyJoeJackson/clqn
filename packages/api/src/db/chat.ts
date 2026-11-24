@@ -66,6 +66,8 @@ export const chatMessages = pgTable(
     proposal: jsonb('proposal').$type<ChatProposal>(),
     taskId: uuid('task_id').references(() => tasks.id),
     tokens: bigint('tokens', { mode: 'number' }),
+    // When the orchestrator first took the message out of the queue; null while queued and for older messages.
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
   },
   (table) => [
     index('chat_messages_history_idx').on(table.clanId, table.sequence),
