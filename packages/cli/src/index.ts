@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import { randomBytes } from 'node:crypto';
-import { resolve } from 'node:path';
 import { serveMcp } from '@clqn/mcp';
 import {
   type Agent,
@@ -14,13 +12,12 @@ import {
   VERSION,
 } from '@clqn/shared';
 import { Command, Option } from 'commander';
+import { startAgentRunner } from './agent-runner.js';
 import {
   type AgentProfile,
   agentProfilePath,
-  detectAgentRuntime,
   type Runtime,
   readAgentProfile,
-  runAgentSession,
   runtimes,
   saveAgentProfile,
 } from './agent-session.js';
@@ -29,7 +26,7 @@ import { hostedServer, preferredServer, readConfig, writeConfig } from './config
 import { localRepository } from './git.js';
 import { configureGithubWebhook, removeGithubWebhook } from './github-hooks.js';
 import { runMcpSync } from './mcp-sync.js';
-import { chooseClan, selectClan, signIn, signOut, terminalPrompt } from './setup.js';
+import { chooseClan, savedClan, selectClan, signIn, signOut, terminalPrompt } from './setup.js';
 import { terminalText } from './terminal.js';
 
 let serverUrl = hostedServer;
@@ -48,7 +45,7 @@ const program = new Command()
     const path = command.name() === 'mcp' ? (command.opts().profile as string | undefined) : undefined;
     const profilePath = path ?? process.env.CLQN_AGENT_PROFILE;
     if (profilePath !== undefined) {
-      if (['run', 'use'].includes(command.name())) throw new Error('Run that command from your personal terminal.');
+      if (command.name() === 'use') throw new Error('Run that command from your personal terminal.');
       sessionProfile = await readAgentProfile(profilePath);
       if (!sessionProfile)
         throw new Error('The saved agent connection is missing. Refresh it from your personal terminal.');
@@ -311,7 +308,7 @@ configureLimits(program.command('limits').description('Show or change your agent
     policyOutput(await (await client()).policy(await selectedClan(options)));
   },
 );
-const agent = program.command('agent').description('Register, run, and list agents');
+const agent = program.command('agent').description('Register and list agents');
 const agentLabel = (entry: Agent) =>
   entry.alias && entry.name !== entry.alias ? `${entry.name} (${entry.alias})` : entry.name;
 const agentSummary = (entry: Agent) => ({
@@ -361,92 +358,18 @@ agent
         registration.alias,
       );
       await rememberAgent(result, options.runtime);
-      const clan = options.clan ? ` --clan ${result.agent.clanId}` : '';
-      // Aliases and IDs never need shell quoting.
-      const launch = `clqn agent run ${result.agent.alias ?? result.agent.id}${clan}`;
       const added = `Registered ${agentLabel(result.agent)} as a ${result.agent.role}.`;
+      const runs =
+        result.agent.role === 'orchestrator'
+          ? 'It works the chat queue while you have clqn open.'
+          : 'It runs the tasks you approve while you have clqn open.';
       output(
         options.showToken ? result : { agent: agentSummary(result.agent) },
-        options.showToken ? `${added}\n${result.token}` : `${added}\nStart a session with ${launch}`,
+        options.showToken ? `${added}\n${result.token}` : `${added}\n${runs}`,
       );
     },
   );
-type RunAgentOptions = { clan?: string; path: string; runtime?: Runtime };
 
-async function defaultAgent(
-  api: ClqnClient,
-  clanId: string,
-  agents: (Agent & { active?: boolean | undefined })[],
-  runtime: Runtime,
-): Promise<Agent> {
-  const user = await api.whoami();
-  if (user.agentId) throw new Error('Run this from your personal terminal.');
-  for (const entry of agents) {
-    if (entry.ownerId !== user.id || entry.role !== 'worker' || entry.active === false) continue;
-    const profile = await readAgentProfile(agentProfilePath(apiUrl(), entry.id));
-    if (profile?.runtime === runtime) return entry;
-  }
-  const handle = user.email
-    .split('@')[0]!
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .slice(0, 40)
-    .replace(/^-|-$/g, '');
-  const base = handle ? `${runtime}-${handle}` : runtime;
-  const alias = agents.some((entry) => entry.alias === base) ? `${base}-${randomBytes(3).toString('hex')}` : base;
-  const name = `${runtime === 'codex' ? 'Codex' : 'Claude Code'} (${handle || user.email})`;
-  try {
-    const result = await api.registerAgent(clanId, name, 'worker', alias);
-    await rememberAgent(result, runtime);
-    return result.agent;
-  } catch (error) {
-    if (error instanceof ApiError && error.code === 'ALIAS_CONFLICT')
-      throw new Error('An agent with this name was just created. Run clqn agent run again.');
-    throw error;
-  }
-}
-
-async function runConnectedAgent(reference: string | undefined, options: RunAgentOptions): Promise<void> {
-  if (program.opts().json) throw new Error('Run clqn agent run in a terminal without --json.');
-  const api = await client();
-  const clanId = await selectedClan(options);
-  const { agents } = await api.listAgents(clanId);
-  let entry: (typeof agents)[number];
-  if (reference === undefined) {
-    entry = await defaultAgent(api, clanId, agents, options.runtime ?? (await detectAgentRuntime()));
-  } else {
-    const matches = agents.filter((agent) => agent.name === reference);
-    const exact = agents.find((agent) => agent.alias === reference || agent.id === reference);
-    if (!exact && matches.length > 1)
-      throw new Error('Several agents have that name. Use an alias or ID from clqn agent list --json.');
-    const match = exact ?? matches[0];
-    if (!match) throw new Error('Agent not found. Run clqn agent list to see your agents.');
-    entry = match;
-  }
-  const path = agentProfilePath(apiUrl(), entry.id);
-  const profile = await readAgentProfile(path);
-  if (!profile || entry.active === false)
-    throw new Error('Refresh this agent’s local connection with clqn agent token <agent>.');
-  const runtime = options.runtime ?? profile.runtime ?? (await detectAgentRuntime());
-  try {
-    const actor = await new ClqnClient(profile.server, profile.token).whoami();
-    if (actor.agentId !== entry.id || actor.clanId !== entry.clanId)
-      throw new Error('The saved connection belongs to a different agent.');
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 401)
-      throw new Error('Refresh this agent’s local connection with clqn agent token <agent>.');
-    throw error;
-  }
-  await runAgentSession(runtime, path, resolve(options.path));
-}
-
-agent
-  .command('run [agent]')
-  .description('Open Codex or Claude Code with your clqn agent connected')
-  .option('--clan <id>', 'clan ID')
-  .option('--path <directory>', 'project clone or worktree (defaults to current directory)', '.')
-  .addOption(runtimeOption())
-  .action(runConnectedAgent);
 agent
   .command('list')
   .option('--clan <id>', 'clan ID')
@@ -543,7 +466,7 @@ async function openChat() {
       console.error(terminalText(`Signed in as ${user.email}`, process.stderr.isTTY));
     }
   }
-  let clanId = process.env.CLQN_CLAN_ID ?? (await readConfig(apiUrl())).clanId;
+  let clanId = process.env.CLQN_CLAN_ID ?? (await savedClan(apiUrl(), await client()));
   if (!clanId) {
     const prompt = terminalPrompt();
     try {
@@ -560,7 +483,16 @@ async function openChat() {
     }
     await selectClan(apiUrl(), clanId);
   }
-  if ((await runChat(await client(), clanId)) === 'sign-out') console.log(await signOut(apiUrl()));
+  const api = await client();
+  // The orchestrator (for the leader) and approved workers run in the background only while the chat is open.
+  const agents = startAgentRunner({ api, server: apiUrl(), clanId, project: process.cwd() });
+  let result: Awaited<ReturnType<typeof runChat>>;
+  try {
+    result = await runChat(api, clanId, agents);
+  } finally {
+    await agents.stop();
+  }
+  if (result === 'sign-out') console.log(await signOut(apiUrl()));
 }
 
 try {

@@ -30,8 +30,14 @@ const setupFor = (settings: ChatSettings): Setup => ({
   field: 3,
 });
 
+// Background agents that follow the polled chat state and report a short status line.
+export interface ChatAgents {
+  update(state: ChatState): void;
+  status(): string | undefined;
+}
+
 // Resolves when the user quits, or with 'sign-out' when they choose Sign out in settings.
-export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' | 'sign-out'> {
+export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgents): Promise<'quit' | 'sign-out'> {
   const { stdin, stdout } = process;
   const actor = await api.whoami();
   if (actor.agentId) throw new Error('Sign in with a personal credential to open the chat');
@@ -108,7 +114,10 @@ export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' |
       approvalFocused,
       reply,
       notice:
-        notice ?? connection ?? (failed ? 'Message unsent · Ctrl+R Retry' : outbox.length ? 'Sending…' : undefined),
+        notice ??
+        connection ??
+        (failed ? 'Message unsent · Ctrl+R Retry' : outbox.length ? 'Sending…' : undefined) ??
+        agents?.status(),
     });
     if (metrics)
       frame = metricsFrame({
@@ -147,6 +156,7 @@ export async function runChat(api: ClqnClient, clanId: string): Promise<'quit' |
     approval = Math.max(index, 0);
     if (!next.approvals.length) approvalFocused = false;
     state = next;
+    agents?.update(next);
   }
 
   async function loadMetrics() {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -132,7 +132,7 @@ test('agent add registers workers and orchestrators with positional names', asyn
   );
 });
 
-test('agent setup saves a private profile and launches either runtime with a scoped connection', async (t) => {
+test('agent setup saves a private profile that scopes later commands to the agent', async (t) => {
   const f = await fixture(t);
   const added = await f.call(['agent', 'add', 'coordinator', '--orchestrator', '--runtime', 'codex', '--json']);
   assert.deepEqual(JSON.parse(added.stdout), {
@@ -140,36 +140,17 @@ test('agent setup saves a private profile and launches either runtime with a sco
   });
   assert.doesNotMatch(added.stdout + added.stderr, /clqn_[A-Za-z0-9_-]{43}/);
   assert.doesNotMatch((await f.call(['agent', 'list'])).stdout, new RegExp(agentId));
-
-  const runtimeScript = [
-    '#!/bin/sh',
-    'if [ -n "$CLQN_TOKEN" ] || [ -n "$CLQN_CLAN_ID" ]; then exit 92; fi',
-    'printf "%s\n" "$CLQN_AGENT_PROFILE" "$PWD" "$@"',
-    '',
-  ].join('\n');
-  for (const runtime of ['codex', 'claude']) await writeFile(join(f.bin, runtime), runtimeScript, { mode: 0o700 });
-
-  const codex = await f.call(['agent', 'run', 'coordinator']);
-  const [profile, cwd, codexFlag, codexConfig, shellFlag, shellConfig] = codex.stdout.trim().split('\n');
-  assert.ok(profile);
-  assert.equal(cwd, await realpath(f.directory));
-  assert.equal(codexFlag, '-c');
-  assert.ok(codexConfig?.startsWith('mcp_servers.clqn={command='));
-  assert.ok(codexConfig?.includes(JSON.stringify(profile)));
-  assert.equal(shellFlag, '-c');
-  assert.equal(shellConfig, `shell_environment_policy.set.CLQN_AGENT_PROFILE=${JSON.stringify(profile)}`);
-  assert.doesNotMatch(codex.stdout + codex.stderr, /clqn_[A-Za-z0-9_-]{43}/);
+  const [file] = await readdir(join(f.directory, 'config', 'agents'));
+  const profile = join(f.directory, 'config', 'agents', file!);
+  assert.ok(file?.endsWith(`-${agentId}.json`));
   assert.equal((await stat(profile)).mode & 0o777, 0o600);
-  assert.equal(JSON.parse(await readFile(profile, 'utf8')).token, f.agentToken);
-
-  const claude = await f.call(['agent', 'run', 'coordinator', '--runtime', 'claude']);
-  const [, , claudeFlag, claudeConfig] = claude.stdout.trim().split('\n');
-  assert.equal(claudeFlag, '--mcp-config');
-  assert.ok(claudeConfig);
-  const { command, args } = JSON.parse(claudeConfig).mcpServers.clqn;
-  assert.equal(command, process.execPath);
-  assert.deepEqual(args.slice(1), ['mcp', '--profile', profile, '--path', await realpath(f.directory)]);
-  assert.doesNotMatch(claude.stdout + claude.stderr, /clqn_[A-Za-z0-9_-]{43}/);
+  const saved = JSON.parse(await readFile(profile, 'utf8'));
+  assert.equal(saved.token, f.agentToken);
+  assert.equal(saved.runtime, 'codex');
+  assert.match(
+    (await f.call(['agent', 'add', 'helper'])).stdout,
+    /runs the tasks you approve while you have clqn open/,
+  );
 
   const identity = JSON.parse((await f.call(['whoami', '--json'], { profile })).stdout);
   assert.equal(identity.agentId, agentId);
@@ -245,6 +226,8 @@ test('removed commands and flags fail before API or Git access', async (t) => {
     ...['add', 'start', 'submit', 'merge', 'done'].map((action) => ['task', action, taskId]),
     ...['context', 'status', 'log', 'metrics'].map((action) => [action]),
     ['agent', 'alias', 'worker', 'short'],
+    ['agent', 'run'],
+    ['agent', 'run', 'coordinator', '--runtime', 'claude'],
     ['login'],
     ['login', '--token-stdin'],
     ['logout'],
@@ -267,6 +250,6 @@ test('main help hides mcp while explicit mcp help remains available', async (t) 
   const main = await f.call(['--help']);
   assert.doesNotMatch(main.stdout, /\bmcp\b|\bpolicy\b/);
   assert.match((await f.call(['mcp', '--help'])).stdout, /Start the local stdio MCP server/);
-  assert.doesNotMatch((await f.call(['agent', '--help'])).stdout, /^\s+(status|connect)(?:\s|$)/m);
+  assert.doesNotMatch((await f.call(['agent', '--help'])).stdout, /^\s+(status|connect|run)(?:\s|$)/m);
   assert.equal(f.requests.length, 0);
 });

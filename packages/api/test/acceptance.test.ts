@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { basename, delimiter, join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -75,11 +75,6 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   delete baseEnv.CLQN_TOKEN;
   delete baseEnv.CLQN_CLAN_ID;
   delete baseEnv.CLQN_AGENT_PROFILE;
-  const bin = join(directory, 'bin');
-  await mkdir(bin);
-  const printProfile = '#!/bin/sh\nprintf "%s\n" "$CLQN_AGENT_PROFILE"\n';
-  for (const runtime of ['codex', 'claude']) await writeFile(join(bin, runtime), printProfile, { mode: 0o700 });
-  baseEnv.PATH = [bin, baseEnv.PATH].filter(Boolean).join(delimiter);
   const aliceEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'alice'), CLQN_TOKEN: alice.token };
   const bobEnv = { ...baseEnv, CLQN_CONFIG_DIR: join(directory, 'bob'), CLQN_TOKEN: bob.token };
   const runRaw = async (env: Record<string, string>, args: string[], input?: string, json = true) => {
@@ -101,12 +96,16 @@ test('MVP acceptance: two people and two stdio agents share context, coordinate 
   await new ClqnClient(apiUrl, bob.token).acceptInvitation(clan.id);
   await run(bobEnv, ['use', clan.name]);
   assert.equal((await run(aliceEnv, ['clans'])).clans.length, 1);
-  const created = await runRaw(aliceEnv, ['agent', 'run', '--runtime', 'codex'], undefined, false);
-  const joined = await runRaw(bobEnv, ['agent', 'run', '--runtime', 'claude'], undefined, false);
-  assert.doesNotMatch(created + joined, /clqn_[A-Za-z0-9_-]{43}/);
-  const codexProfile = created.trim().split('\n').at(-1)!;
-  const claudeProfile = joined.trim().split('\n').at(-1)!;
-  assert.equal((await runRaw(aliceEnv, ['agent', 'run'], undefined, false)).trim(), codexProfile);
+  // The chat connects each member's worker; add them directly here and use their saved connections.
+  const addWorker = async (env: Record<string, string>, name: string, runtime: string) => {
+    const added = await runRaw(env, ['agent', 'add', name, '--runtime', runtime], undefined, false);
+    assert.doesNotMatch(added, /clqn_[A-Za-z0-9_-]{43}/);
+    const agents = join(env.CLQN_CONFIG_DIR!, 'agents');
+    const [file] = await readdir(agents);
+    return join(agents, file!);
+  };
+  const codexProfile = await addWorker(aliceEnv, 'codex-alice', 'codex');
+  const claudeProfile = await addWorker(bobEnv, 'claude-bob', 'claude');
   const { token: codexToken } = JSON.parse(await readFile(codexProfile, 'utf8'));
   const codexEnv = { ...aliceEnv, CLQN_AGENT_PROFILE: codexProfile };
   const claudeEnv = { ...bobEnv, CLQN_AGENT_PROFILE: claudeProfile };
