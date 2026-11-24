@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { emitKeypressEvents, type Key } from 'node:readline';
 import {
   ApiError,
+  allowedModelsSchema,
   type ChatMessage,
   type ChatMetrics,
   type ChatMetricsWindow,
@@ -20,6 +21,12 @@ const numeric = (text: string) => {
   if (!/^\d+$/.test(text) || !Number.isSafeInteger(number)) throw new Error('Limits must be whole numbers or none');
   return number;
 };
+const models = (text: string) => {
+  if (!text.trim() || /^any$/i.test(text.trim())) return null;
+  const parsed = allowedModelsSchema.safeParse(text.split(',').map((model) => model.trim()));
+  if (!parsed.success) throw new Error('Models must be unique names without spaces, separated by commas');
+  return parsed.data;
+};
 
 type Info = Awaited<ReturnType<ClqnClient['chatInfo']>>;
 type Setup = Omit<NonNullable<Parameters<typeof chatFrame>[0]['settings']>, 'action'>;
@@ -27,7 +34,8 @@ const setupFor = (settings: ChatSettings): Setup => ({
   value: settings,
   tokenText: settings.tokenLimit?.toString() ?? '',
   agentText: settings.agentLimit?.toString() ?? '',
-  field: 3,
+  modelText: settings.allowedModels?.join(', ') ?? '',
+  field: 4,
 });
 
 // Background agents that follow the polled chat state and report a short status line.
@@ -201,10 +209,15 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
           return;
         }
       }
-      const { value, tokenText, agentText } = setup;
+      const { value, tokenText, agentText, modelText } = setup;
       await api.joinChat(
         clanId,
-        { ...value, tokenLimit: numeric(tokenText), agentLimit: numeric(agentText) },
+        {
+          ...value,
+          tokenLimit: numeric(tokenText),
+          agentLimit: numeric(agentText),
+          allowedModels: models(modelText),
+        },
         controller.signal,
       );
       mergeState(await api.chatState(clanId, controller.signal));
@@ -284,26 +297,27 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
       else setup = undefined;
     } else if (key.name === 'tab' || key.name === 'up' || key.name === 'down') {
       const change = key.name === 'up' || key.shift ? -1 : 1;
-      setup.field = (setup.field + 5 + change) % 5;
+      setup.field = (setup.field + 6 + change) % 6;
       replaceField = true;
     } else if (setup.field === 0 && ['left', 'right', 'space', 'return'].includes(key.name ?? '')) {
       setup.value = { ...setup.value, approval: setup.value.approval === 'manual' ? 'automatic' : 'manual' };
     } else if (key.name === 'return') {
-      if (setup.field === 3) void save();
-      else if (setup.field === 4) {
+      if (setup.field === 4) void save();
+      else if (setup.field === 5) {
         result = 'sign-out';
         stop();
       } else {
         setup.field++;
         replaceField = true;
       }
-    } else if (setup.field === 1 || setup.field === 2) {
-      const field = setup.field === 1 ? 'tokenText' : 'agentText';
+    } else if (setup.field >= 1 && setup.field <= 3) {
+      const field = (['tokenText', 'agentText', 'modelText'] as const)[setup.field - 1]!;
+      const allowed = field === 'modelText' ? /^[^\x00-\x1f\x7f-\x9f]+$/ : /^[0-9none∞]+$/i;
       if (key.name === 'backspace') {
         setup[field] = setup[field].slice(0, -1);
         replaceField = false;
-      } else if (text && /^[0-9none∞]+$/i.test(text) && !key.ctrl && !key.meta) {
-        setup[field] = ((replaceField ? '' : setup[field]) + text).slice(0, 16);
+      } else if (text && allowed.test(text) && !key.ctrl && !key.meta) {
+        setup[field] = ((replaceField ? '' : setup[field]) + text).slice(0, field === 'modelText' ? 1000 : 16);
         replaceField = false;
       }
     }

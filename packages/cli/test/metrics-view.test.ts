@@ -68,7 +68,7 @@ test('area charts scale to the width and keep the peak', () => {
 test('chat screen offers F5 metrics, drops the token graph, and settings fit 12 rows', () => {
   const state = {
     session: { clan: 'Docs', host: 'ana@example.com' },
-    settings: { approval: 'manual', tokenLimit: 5000, agentLimit: 2 },
+    settings: { approval: 'manual', tokenLimit: 5000, agentLimit: 2, allowedModels: ['model-a', 'model-b'] },
     messages: [],
     before: null,
     approvals: [],
@@ -100,9 +100,22 @@ test('chat screen offers F5 metrics, drops the token graph, and settings fit 12 
   const settings = chatFrame({
     ...base,
     rows: 12,
-    settings: { value: state.settings, tokenText: '5000', agentText: '2', field: 4, action: 'Save settings' },
+    settings: {
+      value: state.settings,
+      tokenText: '5000',
+      agentText: '2',
+      modelText: 'model-a, model-b',
+      field: 5,
+      action: 'Save settings',
+    },
   }).lines;
   assert.ok(settings.length <= 12);
   assert.match(settings.join('\n'), /› Sign out/);
+  assert.match(settings.join('\n'), /Models {11}model-a, model-b/);
+  const any = chatFrame({
+    ...base,
+    settings: { value: state.settings, tokenText: '', agentText: '', modelText: '', field: 3, action: 'Save settings' },
+  }).lines.join('\n');
+  assert.match(any, /› Models {11}Any/);
   assert.match(settings.at(-1)!, /Enter a whole number or none/);
 });

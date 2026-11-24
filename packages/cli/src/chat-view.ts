@@ -97,6 +97,7 @@ interface SettingsView {
   value: ChatSettings;
   tokenText: string;
   agentText: string;
+  modelText: string;
   field: number;
   action: string;
 }
@@ -145,24 +146,26 @@ function compose(view: View, columns: number, paint: Paint) {
   return { line: `${paint('›', 'accent')} ${take(text, columns - 2)}`, column: 2 + occupied };
 }
 
-function settingsLines(settings: SettingsView, columns: number, paint: Paint) {
+// At 12 rows the blank line under the title is dropped so every row still fits.
+function settingsLines(settings: SettingsView, columns: number, paint: Paint, compact: boolean) {
   const labels = [
     `Spawn approval   ${settings.value.approval === 'manual' ? 'Manual' : 'Automatic'}`,
     `Token limit      ${settings.tokenText || '∞'}`,
     `Agent limit      ${settings.agentText || '∞'}`,
+    `Models           ${plain(settings.modelText) || 'Any'}`,
     settings.action,
     'Sign out',
   ];
   return [
     paint('Session settings', 'bold'),
-    '',
+    ...(compact ? [] : ['']),
     ...labels.map((label, index) => {
       const line = clip(`${index === settings.field ? '›' : ' '} ${label}`, columns);
       return index === settings.field ? paint(line, 'accent') : line;
     }),
     '',
     paint(clip('↑↓ Move  ←→ Approval  Enter Select  Esc Back', columns), 'muted'),
-    paint(clip('Enter a whole number or none for unlimited.', columns), 'muted'),
+    paint(clip('Enter a whole number or none for unlimited; models comma-separated, blank for any.', columns), 'muted'),
   ];
 }
 
@@ -188,7 +191,7 @@ export function chatFrame(view: View): Frame {
   });
   const notice = view.notice ? paint(clip(plain(view.notice), content), 'warning') : '';
   if (view.settings) {
-    lines.push(...(rows > 12 ? [''] : []), ...settingsLines(view.settings, content, paint));
+    lines.push(...(rows > 13 ? [''] : []), ...settingsLines(view.settings, content, paint, rows <= 12));
     if (notice) lines.splice(rows - 1, 0, notice);
     return finish();
   }

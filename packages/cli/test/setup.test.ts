@@ -101,9 +101,13 @@ test('choosing a clan opens an existing one, creates one, or reports no invitati
   const created = { ...existing, id: randomUUID(), name: basename(process.cwd()) };
   const token = `clqn_${'b'.repeat(43)}`;
   let clans = [existing];
+  const saved: unknown[] = [];
   const f = await fixture(t, (request, body, response) => {
     assert.equal(request.headers.authorization, `Bearer ${token}`);
-    if (request.url === '/v1/clans' && request.method === 'POST') {
+    if (request.url === `/v1/clans/${created.id}/chat/settings`) {
+      saved.push(body);
+      response.end(JSON.stringify(body));
+    } else if (request.url === '/v1/clans' && request.method === 'POST') {
       assert.deepEqual(body, { name: created.name });
       response.writeHead(201);
       response.end(JSON.stringify(created));
@@ -119,11 +123,16 @@ test('choosing a clan opens an existing one, creates one, or reports no invitati
   assert.match(pickExisting.printed[0]!, /1\. Existing\n {2}2\. Create a clan\n {2}3\. Join a clan/);
   assert.equal(pickExisting.questions.length, 2);
 
+  assert.deepEqual(saved, []);
+
+  // The leader of a new clan is a member too, and Enter picks full access.
   clans = [];
-  const create = scripted(['2', '1', '']);
+  const create = scripted(['2', '1', '', '']);
   assert.deepEqual(await chooseClan({ server: f.url, connect, canSignIn: true, ...create }), created);
   assert.match(create.printed.join('\n'), /No pending invitations\. Ask a clan leader to invite me@example\.com\./);
-  assert.match(create.questions.at(-1)!, /^Clan name \(/);
+  assert.match(create.questions.at(-2)!, /^Clan name \(/);
+  assert.match(create.printed.join('\n'), /1\. Full access \(no limits\)\n {2}2\. Custom/);
+  assert.deepEqual(saved, [{ approval: 'manual', tokenLimit: null, agentLimit: null, allowedModels: null }]);
 });
 
 test('a saved clan the user no longer belongs to is forgotten so setup asks again', async (t) => {
@@ -153,8 +162,13 @@ test('joining a clan accepts the chosen invitation and refreshes a stale GitHub 
     { clanId: clan.id, clanName: clan.name, expiresAt: new Date(Date.now() + 60_000).toISOString() },
   ];
   const accepts: (string | undefined)[] = [];
+  const saved: unknown[] = [];
   const f = await fixture(t, (request, body, response) => {
-    if (request.url === '/auth/github/start') response.end(JSON.stringify(deviceStart));
+    if (request.url === `/v1/clans/${clan.id}/chat/settings`) {
+      assert.equal(request.headers.authorization, `Bearer ${token}`);
+      saved.push(body);
+      response.end(JSON.stringify(body));
+    } else if (request.url === '/auth/github/start') response.end(JSON.stringify(deviceStart));
     else if (request.url === '/auth/github/poll') response.end(JSON.stringify({ status: 'complete', user, token }));
     else if (request.url === '/v1/me') response.end(JSON.stringify(user));
     else if (request.url === '/v1/clans') response.end(JSON.stringify({ clans: [] }));
@@ -170,8 +184,18 @@ test('joining a clan accepts the chosen invitation and refreshes a stale GitHub 
   });
   await writeConfig(f.url, { token: stale });
   const connect = async () => new ClqnClient(f.url, (await readConfig(f.url)).token);
-  const prompts = scripted(['2', '2', '2', '2']);
+  // Custom limits: invalid answers are asked again; blank models allow any.
+  const custom = ['2', '1.5', '5000', '', ' a, b ,c '];
+  const prompts = scripted(['2', '2', '2', '2', ...custom]);
   assert.deepEqual(await chooseClan({ server: f.url, connect, canSignIn: true, ...prompts }), clan);
+  assert.deepEqual(saved, [{ approval: 'manual', tokenLimit: 5000, agentLimit: null, allowedModels: ['a', 'b', 'c'] }]);
+  assert.deepEqual(prompts.questions.slice(-5), [
+    'Enter a number (1): ',
+    'Token limit (blank for none): ',
+    'Token limit (blank for none): ',
+    'Agent count (blank for none): ',
+    'Allowed models, comma-separated (blank for any): ',
+  ]);
   assert.deepEqual(accepts, [`Bearer ${stale}`, `Bearer ${token}`]);
   assert.match(prompts.printed.join('\n'), /1\. First\n {2}2\. Second/);
   assert.equal((await readConfig(f.url)).token, token);

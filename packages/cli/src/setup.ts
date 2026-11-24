@@ -1,6 +1,15 @@
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { ApiError, type Clan, ClqnClient, createClanSchema } from '@clqn/shared';
+import {
+  ApiError,
+  allowedModelsSchema,
+  type ChatSettings,
+  type Clan,
+  ClqnClient,
+  createClanSchema,
+  defaultChatSettings,
+  limitSchema,
+} from '@clqn/shared';
 import { type Config, readConfig, removeConfig, writeConfig, writeServer } from './config.js';
 import { githubLogin } from './login.js';
 import { terminalText } from './terminal.js';
@@ -66,6 +75,40 @@ async function pick(ask: Ask, count: number, question: string) {
   }
 }
 
+// Blank means no limit. Asks again until the answer is valid.
+async function askLimit<T>(ask: Ask, print: Print, question: string, parse: (answer: string) => T | undefined) {
+  for (;;) {
+    const answer = (await ask(question)).trim();
+    const value = answer ? parse(answer) : null;
+    if (value !== undefined) return value;
+    print('Enter a valid value, or leave it blank for no limit.');
+  }
+}
+const wholeNumber = (answer: string) => {
+  const parsed = limitSchema.safeParse(/^\d+$/.test(answer) ? Number(answer) : undefined);
+  return parsed.success ? parsed.data : undefined;
+};
+const modelList = (answer: string) => {
+  const parsed = allowedModelsSchema.safeParse(answer.split(',').map((model) => model.trim()));
+  return parsed.success ? parsed.data : undefined;
+};
+
+// New members, including the leader of a new clan, choose their limits. Approvals still apply either way.
+export async function chooseLimits(api: ClqnClient, clanId: string, ask: Ask, print: Print) {
+  print('\nLimits for agents on your machine\n  1. Full access (no limits)\n  2. Custom');
+  let settings: ChatSettings = defaultChatSettings;
+  if ((await pick(ask, 2, 'Enter a number (1): ')) === 1) {
+    settings = {
+      ...settings,
+      tokenLimit: await askLimit(ask, print, 'Token limit (blank for none): ', wholeNumber),
+      agentLimit: await askLimit(ask, print, 'Agent count (blank for none): ', wholeNumber),
+      allowedModels: await askLimit(ask, print, 'Allowed models, comma-separated (blank for any): ', modelList),
+    };
+  }
+  await api.saveChatSettings(clanId, settings);
+  print('Saved. Change your limits later with F2 in the chat.');
+}
+
 interface ChooseClan {
   server: string;
   connect: () => Promise<ClqnClient>;
@@ -94,7 +137,9 @@ export async function chooseClan({ server, connect, ask, print, canSignIn }: Cho
         print('Enter a clan name of up to 100 characters.');
         continue;
       }
-      return api.createClan(parsed.data.name);
+      const clan = await api.createClan(parsed.data.name);
+      await chooseLimits(api, clan.id, ask, print);
+      return clan;
     }
     try {
       const { invitations } = await api.listInvitations();
@@ -108,7 +153,9 @@ export async function chooseClan({ server, connect, ask, print, canSignIn }: Cho
       );
       const index = await pick(ask, invitations.length, 'Enter a number (Enter to go back): ');
       if (index === undefined) continue;
-      return await api.acceptInvitation(invitations[index]!.clanId);
+      const clan = await api.acceptInvitation(invitations[index]!.clanId);
+      await chooseLimits(api, clan.id, ask, print);
+      return clan;
     } catch (error) {
       if (!(error instanceof ApiError) || error.code !== 'INVITATION_LOGIN_REQUIRED' || !canSignIn) throw error;
       const user = await api.whoami();
