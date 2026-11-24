@@ -12,6 +12,7 @@ import {
   detectAgentRuntime,
   type Runtime,
   readAgentProfile,
+  runtimeSetting,
   saveAgentProfile,
 } from './agent-session.js';
 import { configDirectory } from './config.js';
@@ -76,8 +77,9 @@ async function connect(
   if (agent) {
     const path = agentProfilePath(server, agent.id);
     const profile = await readAgentProfile(path).catch(() => undefined);
-    if (await usable(options, profile, agent)) return { path, profile: profile!, runtime: profile!.runtime ?? runtime };
-    return remember(server, await api.rotateAgentToken(clanId, agent.id), profile?.runtime ?? runtime);
+    const chosen = runtimeSetting() ?? profile?.runtime ?? runtime;
+    if (await usable(options, profile, agent)) return { path, profile: profile!, runtime: chosen };
+    return remember(server, await api.rotateAgentToken(clanId, agent.id), chosen);
   }
   return remember(server, await register(), runtime);
 }
@@ -103,7 +105,7 @@ async function prepare(options: AgentRunnerOptions) {
     const path = agentProfilePath(server, agent.id);
     const profile = await readAgentProfile(path).catch(() => undefined);
     if (profile && profile.clanId === clanId)
-      workers.set(agent.id, { path, profile, runtime: profile.runtime ?? runtime });
+      workers.set(agent.id, { path, profile, runtime: runtimeSetting() ?? profile.runtime ?? runtime });
   }
   if (![...workers.values()].some((worker) => worker.runtime === runtime)) {
     const name = handle(user.email);
@@ -231,7 +233,17 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
       (async () => {
         let failed = true;
         try {
-          failed = !(await launch('orchestrator', connection, options.project, 'orchestrator', orchestratorPrompt)).ok;
+          const { ok, output } = await launch(
+            'orchestrator',
+            connection,
+            options.project,
+            'orchestrator',
+            orchestratorPrompt,
+          );
+          failed = !ok;
+          if (failed && !problem?.startsWith('Install'))
+            problem = `Orchestrator failed · ${output.error ?? `see ${join(configDirectory(), 'logs', 'orchestrator.log')}`}`;
+          else if (problem?.startsWith('Orchestrator')) problem = undefined;
         } catch (error) {
           problem = `Orchestrator · ${message(error)}`;
         } finally {

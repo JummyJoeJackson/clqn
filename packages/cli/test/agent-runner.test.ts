@@ -9,7 +9,7 @@ import { PassThrough } from 'node:stream';
 import test, { type TestContext } from 'node:test';
 import type { ChatRun, ChatState, ClqnClient } from '@clqn/shared';
 import { startAgentRunner } from '../src/agent-runner.js';
-import { agentOutput, agentProfilePath, saveAgentProfile } from '../src/agent-session.js';
+import { agentOutput, agentProfilePath, runtimeSetting, saveAgentProfile } from '../src/agent-session.js';
 
 const server = 'http://127.0.0.1:9';
 const clanId = randomUUID();
@@ -311,4 +311,32 @@ test('runtime output yields total tokens and the final message', () => {
     ),
     { tokens: 16 },
   );
+});
+
+test('runtime output reports why a run failed', () => {
+  assert.equal(
+    agentOutput(
+      'codex',
+      [
+        '{"type":"error","message":"The model is not supported."}',
+        '{"type":"turn.failed","error":{"message":"The \'x\' model is not supported\\nwhen using Codex."}}',
+      ].join('\n'),
+    ).error,
+    "The 'x' model is not supported when using Codex.",
+  );
+  assert.equal(agentOutput('claude', '{"is_error":true,"result":"Invalid API key"}').error, 'Invalid API key');
+  assert.equal(agentOutput('claude', '{"result":"Done."}').error, undefined);
+});
+
+test('CLQN_RUNTIME chooses the agent CLI', async () => {
+  const previous = process.env.CLQN_RUNTIME;
+  try {
+    process.env.CLQN_RUNTIME = 'claude';
+    assert.equal(runtimeSetting(), 'claude');
+    process.env.CLQN_RUNTIME = 'other';
+    assert.equal(runtimeSetting(), undefined);
+  } finally {
+    if (previous === undefined) delete process.env.CLQN_RUNTIME;
+    else process.env.CLQN_RUNTIME = previous;
+  }
 });

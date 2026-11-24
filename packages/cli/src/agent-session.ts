@@ -8,7 +8,10 @@ import { configDirectory, writePrivateJson } from './config.js';
 export const runtimes = ['codex', 'claude'] as const;
 export type Runtime = (typeof runtimes)[number];
 
-export async function detectAgentRuntime(preferred?: Runtime): Promise<Runtime> {
+// CLQN_RUNTIME=claude or codex picks the agent CLI when both are installed.
+export const runtimeSetting = () => runtimes.find((runtime) => runtime === process.env.CLQN_RUNTIME);
+
+export async function detectAgentRuntime(preferred = runtimeSetting()): Promise<Runtime> {
   const directories = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
   for (const runtime of preferred ? [preferred] : runtimes) {
     const executable = await Promise.any(
@@ -120,9 +123,10 @@ const count = (...values: unknown[]) =>
   values.reduce<number>((sum, value) => sum + (typeof value === 'number' && value > 0 ? value : 0), 0);
 
 // Total input and output tokens and the final message from a finished run's stdout.
-export function agentOutput(runtime: Runtime, stdout: string): { tokens: number; text?: string } {
+export function agentOutput(runtime: Runtime, stdout: string): { tokens: number; text?: string; error?: string } {
   let tokens = 0;
   let text: string | undefined;
+  let error: string | undefined;
   for (const line of runtime === 'codex' ? stdout.split('\n') : [stdout]) {
     let event: Json;
     try {
@@ -139,14 +143,29 @@ export function agentOutput(runtime: Runtime, stdout: string): { tokens: number;
         usage.output_tokens,
       );
       if (typeof event.result === 'string') text = event.result;
+      if (event.is_error === true) error = text ?? 'Claude Code reported an error';
     } else if (event.type === 'turn.completed') {
       // Codex input tokens already include cached input.
       const usage = object(event.usage);
       tokens += count(usage.input_tokens, usage.output_tokens);
+    } else if (event.type === 'turn.failed' || event.type === 'error') {
+      const detail = event.type === 'error' ? event.message : object(event.error).message;
+      if (typeof detail === 'string') error = detail;
     } else if (event.type === 'item.completed') {
       const item = object(event.item);
       if (item.type === 'agent_message' && typeof item.text === 'string') text = item.text;
     }
   }
-  return { tokens: Math.min(tokens, Number.MAX_SAFE_INTEGER), ...(text?.trim() ? { text: text.trim() } : {}) };
+  return {
+    tokens: Math.min(tokens, Number.MAX_SAFE_INTEGER),
+    ...(text?.trim() ? { text: text.trim() } : {}),
+    ...(error ? { error: plainError(error) } : {}),
+  };
 }
+
+// Runtime errors are shown on one status line, so keep them short and free of control characters.
+const plainError = (text: string) =>
+  text
+    .replace(/[\x00-\x1f\x7f-\x9f]+/g, ' ')
+    .trim()
+    .slice(0, 160);
