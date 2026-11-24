@@ -1,29 +1,9 @@
 import type { ChatMessage, ChatSettings, ChatState } from '@clqn/shared';
 
-export const plain = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, ' ');
-const segmenter = new Intl.Segmenter();
-export const characters = (text: string) => Array.from(segmenter.segment(text), ({ segment }) => segment);
-function cells(char: string) {
-  if (/^\p{Mark}+$/u.test(char)) return 0;
-  return /[\p{Extended_Pictographic}\p{Regional_Indicator}\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\uff01-\uff60\uffe0-\uffe6]/u.test(
-    char,
-  )
-    ? 2
-    : 1;
-}
-export const width = (text: string) => characters(text).reduce((total, char) => total + cells(char), 0);
-function take(text: string, limit: number) {
-  let used = 0;
-  let result = '';
-  for (const char of characters(text)) {
-    used += cells(char);
-    if (used > limit) break;
-    result += char;
-  }
-  return result;
-}
-export const clip = (text: string, limit: number) => (width(text) <= limit ? text : `${take(text, limit - 1)}…`);
-export const pad = (text: string, limit: number) => text + ' '.repeat(Math.max(0, limit - width(text)));
+import { markdownLines } from './markdown.js';
+import { cells, characters, clip, type Paint, pad, painter, plain, take, width } from './text.js';
+
+export { characters, clip, type Paint, pad, painter, plain, width };
 
 function wrap(text: string, limit: number) {
   const lines: string[] = [];
@@ -68,13 +48,6 @@ export const number = (value: number) =>
 export const limit = (value: number | null) => (value === null ? '∞' : number(value));
 const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
-type Tone = 'accent' | 'muted' | 'active' | 'warning' | 'bold' | 'error';
-const codes: Record<Tone, number> = { accent: 96, muted: 90, active: 92, warning: 93, bold: 1, error: 91 };
-export type Paint = (text: string, tone: Tone) => string;
-export const painter =
-  (color: boolean): Paint =>
-  (text, tone) =>
-    color ? `\x1b[${codes[tone]}m${text}\x1b[0m` : text;
 const statuses = {
   queued: ['◌', 'Queued', 'muted'],
   handled: ['✓', 'Handled', 'active'],
@@ -130,7 +103,10 @@ export function messageLines(message: ChatMessage, columns: number, userId: stri
   const header =
     `${paint(icon, tone)} ${paint(label, isMember ? 'bold' : 'accent')}  ${paint(stamp, 'muted')}` +
     (status && width(label) + status.length + 11 <= columns ? `  ${paint(status, tone)}` : '');
-  return [header, ...wrap(message.text, Math.max(2, columns - 2)).map((line) => `  ${line}`)];
+  const body = isMember
+    ? wrap(message.text, Math.max(2, columns - 2))
+    : markdownLines(message.text, Math.max(2, columns - 2), paint);
+  return [header, ...body.map((line) => `  ${line}`)];
 }
 
 function compose(view: View, columns: number, paint: Paint) {
@@ -146,7 +122,7 @@ function compose(view: View, columns: number, paint: Paint) {
   return { line: `${paint('›', 'accent')} ${take(text, columns - 2)}`, column: 2 + occupied };
 }
 
-// At 12 rows the blank line under the title is dropped so every row still fits.
+// On short terminals the blank lines around the rows are dropped so every row still fits.
 function settingsLines(settings: SettingsView, columns: number, paint: Paint, compact: boolean) {
   const labels = [
     `Spawn approval   ${settings.value.approval === 'manual' ? 'Manual' : 'Automatic'}`,
@@ -192,7 +168,7 @@ export function chatFrame(view: View): Frame {
   });
   const notice = view.notice ? paint(clip(plain(view.notice), content), 'warning') : '';
   if (view.settings) {
-    lines.push(...(rows > 13 ? [''] : []), ...settingsLines(view.settings, content, paint, rows <= 12));
+    lines.push(...(rows > 14 ? [''] : []), ...settingsLines(view.settings, content, paint, rows <= 13));
     if (notice) lines.splice(rows - 1, 0, notice);
     return finish();
   }
