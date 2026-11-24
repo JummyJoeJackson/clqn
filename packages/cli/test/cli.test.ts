@@ -222,6 +222,8 @@ test('CLI login, clan creation, membership, and logout persist API-scoped privat
   assert.match((await f.call(['whoami'])).stdout, /alice@example.com/);
   assert.deepEqual(JSON.parse((await f.call(['init', f.clan.name, '--json'])).stdout), f.clan);
   assert.deepEqual(JSON.parse((await f.call(['clans', '--json'])).stdout), { clans: [f.clan] });
+  assert.equal((await f.call(['clans'])).stdout, 'My project (current)\n');
+  assert.equal((await f.call(['use', 'my project'])).stdout, 'Using My project.\n');
   assert.deepEqual(JSON.parse((await f.call(['members', '--json'])).stdout), f.members);
   assert.deepEqual(JSON.parse((await f.call(['members', '--clan', f.clan.id, '--json'])).stdout), f.members);
   assert.match((await f.call(['members'])).stdout, /alice@example.com  leader/);

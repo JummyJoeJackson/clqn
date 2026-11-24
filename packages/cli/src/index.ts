@@ -28,6 +28,7 @@ import {
 import { configureGithubWebhook, removeGithubWebhook } from './github-hooks.js';
 import { runMcpSync } from './mcp-sync.js';
 import { renderActivity, renderMetrics } from './metrics.js';
+import { terminalText } from './terminal.js';
 
 const program = new Command()
   .name('clqn')
@@ -42,8 +43,8 @@ const program = new Command()
 
 const apiUrl = () => program.opts().apiUrl as string;
 const verbatim = (value: unknown, text: string) => console.log(program.opts().json ? JSON.stringify(value) : text);
-// API strings are untrusted; keep terminal control characters out of human-readable output.
-const output = (value: unknown, human: string) => verbatim(value, human.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ' '));
+const output = (value: unknown, human: string, urls?: readonly (string | null | undefined)[]) =>
+  verbatim(value, terminalText(human, process.stdout.isTTY, urls));
 const displayId = (value: { id: string; alias?: string | null | undefined }) =>
   value.alias ? `${value.alias} (${value.id})` : value.id;
 const defaultAlias = (name: string) => resourceAliasSchema.safeParse(name.trim()).data;
@@ -141,7 +142,13 @@ program
     if (options.github || process.stdin.isTTY) {
       const api = new ClqnClient(apiUrl());
       const attempt = await api.startGithubLogin();
-      console.error(`Open ${attempt.verificationUri} and enter code ${attempt.userCode}`);
+      console.error(
+        terminalText(
+          `Open GitHub to authorize clqn:\n${attempt.verificationUri}\n\nEnter this one-time GitHub code: ${attempt.userCode}`,
+          process.stderr.isTTY && !program.opts().json,
+          [attempt.verificationUri],
+        ),
+      );
       const deadline = Date.now() + attempt.expiresIn * 1000;
       let interval = attempt.interval;
       while (Date.now() + interval * 1000 < deadline) {
@@ -221,11 +228,8 @@ program
     const user = await api.whoami();
     if (user.agentId) {
       const agent = await api.agentStatus();
-      output(
-        { ...user, agent },
-        `${displayId(agent)}  ${agent.name}  role=${agent.role} clan=${agent.clanId} owner=${agent.ownerId}\n${user.email} (${user.id})`,
-      );
-    } else output(user, `${user.email} (${user.id})`);
+      output({ ...user, agent }, `${agent.name} (${agent.role})\nSigned in for ${user.email}`);
+    } else output(user, user.email);
   });
 
 program
@@ -235,7 +239,7 @@ program
     const config = await readConfig(apiUrl());
     const clan = await (await client()).createClan(name);
     await writeConfig(apiUrl(), { ...config, clanId: clan.id });
-    output(clan, `Created ${clan.name} (${clan.id})`);
+    output(clan, `Created and selected ${clan.name}.`);
   });
 
 program
@@ -243,7 +247,29 @@ program
   .description('List your clans')
   .action(async () => {
     const result = await (await client()).listClans();
-    output(result, result.clans.map((clan) => `${clan.id}  ${clan.name}`).join('\n') || 'No clans yet.');
+    const { clanId } = await readConfig(apiUrl());
+    const active = process.env.CLQN_CLAN_ID ?? clanId;
+    output(
+      result,
+      result.clans.map((clan) => `${clan.name}${clan.id === active ? ' (current)' : ''}`).join('\n') ||
+        'No clans yet. Run clqn init "My project" to create one, or ask a teammate to invite you.',
+    );
+  });
+
+program
+  .command('use <clan>')
+  .description('Select one of your clans by name')
+  .action(async (name: string) => {
+    const config = await readConfig(apiUrl());
+    const { clans } = await (await client()).listClans();
+    const byId = clans.find((clan) => clan.id === name);
+    const matches = clans.filter((clan) => clan.name.toLowerCase() === name.toLowerCase());
+    if (!byId && matches.length > 1)
+      throw new Error('Several clans have that name. Run clqn clans --json and select one by ID.');
+    const clan = byId ?? matches[0];
+    if (!clan) throw new Error('Clan not found. Run clqn clans to see your clans.');
+    await writeConfig(apiUrl(), { ...config, clanId: clan.id });
+    output(clan, `Using ${clan.name}.`);
   });
 
 program
@@ -253,7 +279,7 @@ program
     const config = await readConfig(apiUrl());
     const clan = await (await client()).joinClan(code);
     await writeConfig(apiUrl(), { ...config, clanId: clan.id });
-    output(clan, `Joined ${clan.name} (${clan.id})`);
+    output(clan, `Joined and selected ${clan.name}.`);
   });
 
 program
@@ -276,10 +302,7 @@ const members = program
   .action(async (options: { clan?: string }) => {
     const clanId = await selectedClan(options);
     const result = await (await client()).members(clanId);
-    output(
-      result,
-      result.members.map((member) => `${member.email}  ${member.role}  ${member.userId}`).join('\n') || 'No members.',
-    );
+    output(result, result.members.map((member) => `${member.email}  ${member.role}`).join('\n') || 'No members.');
   });
 const findMember = async (api: ClqnClient, clanId: string, member: string) => {
   const found = (await api.members(clanId)).members.find(
@@ -330,7 +353,7 @@ const selectedClan = async (options: { clan?: string } = {}) => {
     if (actor.clanId) return actor.clanId;
   }
   if (config.clanId) return config.clanId;
-  throw new Error('Select a clan with --clan <id>, CLQN_CLAN_ID, init, or join');
+  throw new Error('Select a clan with clqn use <name>. Run clqn clans to see your clans.');
 };
 const policyOutput = (value: Awaited<ReturnType<ClqnClient['policy']>>) =>
   output(
@@ -531,7 +554,7 @@ task
           : undefined;
       const alias = options.alias ?? defaultAlias(description);
       const result = await (await client()).createTask(await selectedClan(options), description, repository, alias);
-      output(result, describeTask(result));
+      output(result, describeTask(result), [result.repository?.prUrl]);
     },
   );
 task
@@ -540,7 +563,7 @@ task
   .option('--clan <id>', 'clan ID')
   .action(async (id: string, alias: string, options: { clan?: string }) => {
     const result = await (await client()).setTaskAlias(await selectedClan(options), id, alias);
-    output(result, describeTask(result));
+    output(result, describeTask(result), [result.repository?.prUrl]);
   });
 task
   .command('list')
@@ -561,14 +584,18 @@ task
       mine: filters.mine === 'true',
     });
     const more = result.nextCursor ? `\n\nMore tasks: task list --after ${result.nextCursor}` : '';
-    output(result, (result.tasks.map(describeTask).join('\n\n') || 'No tasks.') + more);
+    output(
+      result,
+      (result.tasks.map(describeTask).join('\n\n') || 'No tasks.') + more,
+      result.tasks.map((entry) => entry.repository?.prUrl),
+    );
   });
 task
   .command('show <id>')
   .option('--clan <id>', 'clan ID')
   .action(async (id: string, options: { clan?: string }) => {
     const result = await (await client()).task(await selectedClan(options), id);
-    output(result, describeTask(result));
+    output(result, describeTask(result), [result.repository?.prUrl]);
   });
 task
   .command('assign <id>')
@@ -576,7 +603,7 @@ task
   .option('--clan <id>', 'clan ID')
   .action(async (id: string, options: { clan?: string; agent: string }) => {
     const result = await (await client()).assignTask(await selectedClan(options), id, options.agent);
-    output(result, describeTask(result));
+    output(result, describeTask(result), [result.repository?.prUrl]);
   });
 task
   .command('unassign <id>')
@@ -585,7 +612,7 @@ task
   .option('--clan <id>', 'clan ID')
   .action(async (id: string, options: { clan?: string; agent: string }) => {
     const result = await (await client()).unassignTask(await selectedClan(options), id, options.agent);
-    output(result, describeTask(result));
+    output(result, describeTask(result), [result.repository?.prUrl]);
   });
 const ownedRepositoryTask = async (api: ClqnClient, clanId: string, id: string) => {
   const value = await api.task(clanId, id);
@@ -672,7 +699,7 @@ task
         expectedHeadSha: repository.headSha,
         ...pushed,
       });
-      output(result, describeTask(result));
+      output(result, describeTask(result), [result.repository?.prUrl]);
     } catch (error) {
       throw new Error(
         `PR ${pushed.prUrl} was published, but the clan report failed. Read task state before retrying. ${error instanceof Error ? error.message : 'API request failed'}`,
@@ -690,6 +717,7 @@ task
     output(
       { taskId: value.id, ...result },
       `${result.url}\n${result.state}  checks=${result.checksPassed ? 'passed' : 'not passed'}\nHead: ${result.headSha}`,
+      [result.url],
     );
   });
 task
@@ -731,6 +759,7 @@ task
       integrated.repository?.state === 'merged'
         ? describeTask(integrated)
         : `${describeTask(integrated)}\nMerged on GitHub; the task is marked merged when GitHub's signed webhook confirms it.`,
+      [integrated.repository?.prUrl],
     );
   });
 for (const action of ['release', 'complete'] as const) {
@@ -809,7 +838,7 @@ try {
             message,
           },
         })
-      : `Error: ${message}`,
+      : terminalText(`Error: ${message}`, process.stderr.isTTY),
   );
   process.exitCode = 1;
 }

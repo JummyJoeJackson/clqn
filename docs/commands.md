@@ -1,6 +1,6 @@
 # Commands
 
-Commands use the selected clan and current directory. Add `--clan <id>` to override the clan or `--json` for scripting. Use `clqn --help` and `clqn <command> --help` for options.
+Commands use the selected clan and current directory. Run `clqn clans` to see your clans and `clqn use "My project"` to switch. Add `--clan <id>` to override the clan or `--json` for scripting. Use `clqn --help` and `clqn <command> --help` for options.
 
 ## Common workflow
 
