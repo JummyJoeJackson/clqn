@@ -8,27 +8,43 @@ import { configDirectory, writePrivateJson } from './config.js';
 export const runtimes = ['codex', 'claude'] as const;
 export type Runtime = (typeof runtimes)[number];
 
-// CLQN_RUNTIME=claude or codex picks the agent CLI when both are installed.
-export const runtimeSetting = () => runtimes.find((runtime) => runtime === process.env.CLQN_RUNTIME);
+export const runtimeNames: Record<Runtime, string> = { claude: 'Claude Code', codex: 'Codex' };
 
-export async function detectAgentRuntime(preferred = runtimeSetting()): Promise<Runtime> {
+async function installed(runtime: Runtime) {
   const directories = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
-  for (const runtime of preferred ? [preferred] : runtimes) {
-    const executable = await Promise.any(
-      directories.map(async (directory) => {
-        const path = resolve(directory, runtime);
-        await access(path, constants.X_OK);
-        if (!(await stat(path)).isFile()) throw new Error();
-        return path;
-      }),
-    ).catch(() => undefined);
-    if (executable) return runtime;
+  return Promise.any(
+    directories.map(async (directory) => {
+      const path = resolve(directory, runtime);
+      await access(path, constants.X_OK);
+      if (!(await stat(path)).isFile()) throw new Error();
+    }),
+  ).then(
+    () => true,
+    () => false,
+  );
+}
+
+// The agent CLIs on PATH, in the order the orchestrator prefers them.
+export async function installedRuntimes(): Promise<Runtime[]> {
+  const found = await Promise.all(runtimes.map(installed));
+  return runtimes.filter((_, index) => found[index]);
+}
+
+// Agents the member turned off on this machine. Saving what is off keeps newly installed agents on.
+const choicesPath = () => join(configDirectory(), 'agents.json');
+
+export async function readAgentsOff(): Promise<Runtime[]> {
+  try {
+    const value: unknown = JSON.parse(await readFile(choicesPath(), 'utf8'));
+    const off = (value as { off?: unknown } | null)?.off;
+    return runtimes.filter((runtime) => Array.isArray(off) && off.includes(runtime));
+  } catch {
+    return [];
   }
-  if (preferred)
-    throw new Error(
-      `Install ${preferred === 'codex' ? 'Codex CLI' : 'Claude Code'} and make sure ${preferred} is on PATH.`,
-    );
-  throw new Error('Install Codex CLI or Claude Code to run agents. Make sure codex or claude is on PATH.');
+}
+
+export function saveAgentsOff(off: Runtime[]): Promise<void> {
+  return writePrivateJson(choicesPath(), { off: runtimes.filter((runtime) => off.includes(runtime)) });
 }
 
 export type AgentProfile = {

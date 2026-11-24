@@ -34,12 +34,12 @@ Each member sets their own:
 - Metrics tab (F5): tokens and active agents over time, tokens by member and by task, and queue wait, over 24h or 7d
 - GitHub webhooks tell connected agents when `main` changes, and clean checkouts sync
 - The API runs on Google Cloud (Cloud Run + PostgreSQL)
+- Choose your agents: settings (F2) list the agent CLIs on your machine (Claude Code, Codex), each on or off. Each one that's on is a worker the orchestrator can pick
 
 ## What's next
 
 1. **`main` sync in the chat screen.** Link the repo during setup, and keep `main` synced while `clqn` is open.
-2. **Choose your agents.** An "Agents" row in settings (F2) lists the agent CLIs installed on your machine (Claude Code, Codex), each on or off; all installed ones start on. Each one that's on is a worker the orchestrator can pick, within your allowed models. If none is installed, the chat says so. Replaces `CLQN_RUNTIME`.
-3. **Update documentation (README - concise, user focused), website**
+2. **Update documentation (README - concise, user focused), website**
 
 ## Later
 

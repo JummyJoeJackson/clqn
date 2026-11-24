@@ -9,7 +9,7 @@ import { PassThrough } from 'node:stream';
 import test, { type TestContext } from 'node:test';
 import type { ChatRun, ChatState, ClqnClient } from '@clqn/shared';
 import { startAgentRunner } from '../src/agent-runner.js';
-import { agentCommand, agentOutput, agentProfilePath, runtimeSetting, saveAgentProfile } from '../src/agent-session.js';
+import { agentCommand, agentOutput, agentProfilePath, readAgentsOff, saveAgentProfile } from '../src/agent-session.js';
 
 const server = 'http://127.0.0.1:9';
 const clanId = randomUUID();
@@ -119,7 +119,7 @@ test('the leader’s chat connects an orchestrator and runs it only while messag
     clanId,
     project: f.directory,
     spawn: f.spawn,
-    runtime: async () => 'claude',
+    runtimes: async () => ['claude'],
     now: f.now,
   });
   t.after(() => runner.stop());
@@ -192,7 +192,7 @@ test('approved runs start this member’s worker with its model, report usage, a
     clanId,
     project: f.directory,
     spawn: f.spawn,
-    runtime: async () => 'codex',
+    runtimes: async () => ['codex'],
     now: f.now,
     agentClient: (profile) => {
       assert.equal(profile.agentId, workerId);
@@ -283,14 +283,15 @@ test('a member without Claude Code or Codex sees why agents are off', async (t) 
     clanId,
     project: f.directory,
     spawn: f.spawn,
-    runtime: async () => {
-      throw new Error('Install Codex CLI or Claude Code to run agents.');
-    },
+    runtimes: async () => [],
   });
   t.after(() => runner.stop());
   runner.update(chatState({ queued: 1 }));
   await until(() => runner.status() !== undefined);
-  assert.equal(runner.status(), 'Agents off · Install Codex CLI or Claude Code to run agents.');
+  assert.equal(
+    runner.status(),
+    'Agents off · Install Claude Code or Codex to run agents. Make sure claude or codex is on PATH.',
+  );
   assert.equal(f.spawned.length, 0);
 });
 
@@ -331,17 +332,61 @@ test('runtime output reports why a run failed', () => {
   assert.equal(agentOutput('claude', '{"result":"Done."}').error, undefined);
 });
 
-test('CLQN_RUNTIME chooses the agent CLI', async () => {
-  const previous = process.env.CLQN_RUNTIME;
-  try {
-    process.env.CLQN_RUNTIME = 'claude';
-    assert.equal(runtimeSetting(), 'claude');
-    process.env.CLQN_RUNTIME = 'other';
-    assert.equal(runtimeSetting(), undefined);
-  } finally {
-    if (previous === undefined) delete process.env.CLQN_RUNTIME;
-    else process.env.CLQN_RUNTIME = previous;
-  }
+test('each installed agent that is on becomes a worker; turning one off revokes it', async (t) => {
+  const f = await fixture(t);
+  const codexId = randomUUID();
+  await saveAgentProfile({ agentId: codexId, clanId, server, token: token('c'), runtime: 'codex' });
+  const listed = new Map<string, ReturnType<typeof agent>>([[codexId, { ...agent(codexId, 'worker'), active: true }]]);
+  const calls: string[] = [];
+  const api = {
+    whoami: async (): Promise<unknown> => ({ id: userId, email: 'member@example.com' }),
+    listAgents: async () => ({ agents: [...listed.values()] }),
+    members: async () => ({ members: [{ userId, email: 'member@example.com', role: 'member' }] }),
+    registerAgent: async (_clan: string, name: string, role: 'worker', alias?: string) => {
+      const id = randomUUID();
+      calls.push(`register ${name} ${alias}`);
+      listed.set(id, { ...agent(id, role), name, active: true });
+      return { agent: { ...agent(id, role), name, alias }, token: token('n') };
+    },
+    revokeAgent: async (_clan: string, id: string) => {
+      calls.push(`revoke ${id === codexId ? 'codex' : id}`);
+      listed.set(id, { ...listed.get(id)!, active: false });
+      return {};
+    },
+    rotateAgentToken: async (_clan: string, id: string) => {
+      calls.push(`rotate ${id === codexId ? 'codex' : id}`);
+      listed.set(id, { ...listed.get(id)!, active: true });
+      return { agent: agent(id, 'worker'), token: token('r') };
+    },
+  } as unknown as ClqnClient;
+  const runner = startAgentRunner({
+    api,
+    server,
+    clanId,
+    project: f.directory,
+    spawn: f.spawn,
+    runtimes: async () => ['codex', 'claude'],
+    now: f.now,
+    agentClient: () =>
+      ({ whoami: async () => ({ id: userId, email: 'member@example.com', agentId: codexId }) }) as never,
+  });
+  t.after(() => runner.stop());
+
+  assert.deepEqual(await runner.choices(), { installed: ['codex', 'claude'], off: [] });
+  runner.update(chatState());
+  await until(() => calls.length === 1);
+  assert.deepEqual(calls, ['register Claude Code (member) claude-member']);
+
+  await runner.choose(['codex']);
+  assert.deepEqual(await readAgentsOff(), ['codex']);
+  await until(() => calls.length === 2);
+  assert.equal(calls[1], 'revoke codex');
+
+  // Turning it back on reactivates the same worker with a new token.
+  await runner.choose([]);
+  await until(() => calls.length === 3);
+  assert.equal(calls[2], 'rotate codex');
+  assert.deepEqual(await runner.choices(), { installed: ['codex', 'claude'], off: [] });
 });
 
 test('workers run commands as the member allows: off, sandboxed by default, or unrestricted', async (t) => {

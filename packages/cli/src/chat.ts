@@ -11,6 +11,8 @@ import {
   type ClqnClient,
   type SendChat,
 } from '@clqn/shared';
+import type { AgentChoices } from './agent-runner.js';
+import type { Runtime } from './agent-session.js';
 import { characters, chatFrame, messageLines, plain, transcriptColumns } from './chat-view.js';
 import { metricsFrame } from './metrics-view.js';
 
@@ -36,13 +38,26 @@ const setupFor = (settings: ChatSettings): Setup => ({
   tokenText: settings.tokenLimit?.toString() ?? '',
   agentText: settings.agentLimit?.toString() ?? '',
   modelText: settings.allowedModels?.join(', ') ?? '',
-  field: 5,
+  field: 6,
 });
 
 // Background agents that follow the polled chat state and report a short status line.
 export interface ChatAgents {
   update(state: ChatState): void;
   status(): string | undefined;
+  // The agent CLIs installed on this machine and which the member turned off.
+  choices(): Promise<AgentChoices>;
+  choose(off: Runtime[]): Promise<void>;
+}
+
+// Step through every on/off combination of the installed agents, all on first.
+function nextChoice(choices: AgentChoices, step: number): AgentChoices {
+  const { installed } = choices;
+  const combinations = 2 ** installed.length;
+  const mask = installed.reduce((bits, runtime, index) => bits | (choices.off.includes(runtime) ? 1 << index : 0), 0);
+  const next = (mask + step + combinations) % combinations;
+  const kept = choices.off.filter((runtime) => !installed.includes(runtime));
+  return { installed, off: [...kept, ...installed.filter((_, index) => next & (1 << index))] };
 }
 
 // Resolves when the user quits, or with 'sign-out' when they choose Sign out in settings.
@@ -52,6 +67,8 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
   if (actor.agentId) throw new Error('Sign in with a personal credential to open the chat');
   let info: Info = await api.chatInfo(clanId);
   let setup: Setup | undefined = setupFor(info.settings);
+  let saved: AgentChoices | undefined;
+  void loadChoices();
   let result: 'quit' | 'sign-out' = 'quit';
   let replaceField = true;
   let state: ChatState | undefined;
@@ -197,6 +214,16 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
     }
   }
 
+  async function loadChoices() {
+    try {
+      saved = await agents?.choices();
+    } catch {
+      saved = undefined;
+    }
+    if (setup && saved) setup.agents ??= saved;
+    draw();
+  }
+
   async function save() {
     if (busy || !setup) return;
     busy = true;
@@ -221,6 +248,11 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
         },
         controller.signal,
       );
+      const chosen = setup.agents;
+      if (chosen && agents && chosen.off.join() !== saved?.off.join()) {
+        await agents.choose(chosen.off);
+        saved = chosen;
+      }
       mergeState(await api.chatState(clanId, controller.signal));
       setup = undefined;
     } catch (error) {
@@ -298,7 +330,7 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
       else setup = undefined;
     } else if (key.name === 'tab' || key.name === 'up' || key.name === 'down') {
       const change = key.name === 'up' || key.shift ? -1 : 1;
-      setup.field = (setup.field + 7 + change) % 7;
+      setup.field = (setup.field + 8 + change) % 8;
       replaceField = true;
     } else if (setup.field === 0 && ['left', 'right', 'space', 'return'].includes(key.name ?? '')) {
       setup.value = { ...setup.value, approval: setup.value.approval === 'manual' ? 'automatic' : 'manual' };
@@ -306,9 +338,11 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
       const levels = ['off', 'sandboxed', 'unrestricted'] as const;
       const next = levels.indexOf(setup.value.commands) + (key.name === 'left' ? 2 : 1);
       setup.value = { ...setup.value, commands: levels[next % 3]! };
+    } else if (setup.field === 5 && ['left', 'right', 'space', 'return'].includes(key.name ?? '')) {
+      if (setup.agents?.installed.length) setup.agents = nextChoice(setup.agents, key.name === 'left' ? -1 : 1);
     } else if (key.name === 'return') {
-      if (setup.field === 5) void save();
-      else if (setup.field === 6) {
+      if (setup.field === 6) void save();
+      else if (setup.field === 7) {
         result = 'sign-out';
         stop();
       } else {
@@ -330,7 +364,8 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
 
   function composerKey(text: string, key: Key) {
     if (key.name === 'f2' && state) {
-      setup = setupFor(state.settings);
+      setup = { ...setupFor(state.settings), agents: saved };
+      void loadChoices();
       approvalFocused = false;
     } else if (key.name === 'f5') {
       metrics = { window: '24h', at: 0 };

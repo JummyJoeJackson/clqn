@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatSettings, ChatState } from '@clqn/shared';
 
+import { type Runtime, runtimeNames } from './agent-session.js';
 import { markdownLines } from './markdown.js';
 import { cells, characters, clip, type Paint, pad, painter, plain, take, width } from './text.js';
 
@@ -71,6 +72,8 @@ interface SettingsView {
   tokenText: string;
   agentText: string;
   modelText: string;
+  // Agent CLIs on this machine; undefined until they are found.
+  agents?: { installed: Runtime[]; off: Runtime[] } | undefined;
   field: number;
   action: string;
 }
@@ -122,6 +125,14 @@ function compose(view: View, columns: number, paint: Paint) {
   return { line: `${paint('›', 'accent')} ${take(text, columns - 2)}`, column: 2 + occupied };
 }
 
+function agentsText(agents: SettingsView['agents']) {
+  if (!agents) return 'Checking…';
+  if (!agents.installed.length) return 'None installed · install Claude Code or Codex';
+  return agents.installed
+    .map((runtime) => `${runtimeNames[runtime]} ${agents.off.includes(runtime) ? 'off' : 'on'}`)
+    .join(' · ');
+}
+
 // On short terminals the blank lines around the rows are dropped so every row still fits.
 function settingsLines(settings: SettingsView, columns: number, paint: Paint, compact: boolean) {
   const labels = [
@@ -130,6 +141,7 @@ function settingsLines(settings: SettingsView, columns: number, paint: Paint, co
     `Agent limit      ${settings.agentText || '∞'}`,
     `Models           ${plain(settings.modelText) || 'Any'}`,
     `Worker commands  ${{ off: 'Off', sandboxed: 'Sandboxed', unrestricted: 'Unrestricted' }[settings.value.commands]}`,
+    `Agents           ${agentsText(settings.agents)}`,
     settings.action,
     'Sign out',
   ];
@@ -140,8 +152,8 @@ function settingsLines(settings: SettingsView, columns: number, paint: Paint, co
       const line = clip(`${index === settings.field ? '›' : ' '} ${label}`, columns);
       return index === settings.field ? paint(line, 'accent') : line;
     }),
-    ...(compact ? [] : ['']),
-    paint(clip('↑↓ Move  ←→ Change  Enter Select  Esc Back', columns), 'muted'),
+    // Short terminals drop the key hints so every row still fits.
+    ...(compact ? [] : ['', paint(clip('↑↓ Move  ←→ Change  Enter Select  Esc Back', columns), 'muted')]),
     paint(clip('Enter a whole number or none for unlimited; models comma-separated, blank for any.', columns), 'muted'),
   ];
 }

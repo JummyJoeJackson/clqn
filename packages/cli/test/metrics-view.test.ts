@@ -111,13 +111,15 @@ test('chat screen offers Ctrl+G metrics, drops the token graph, and settings fit
       tokenText: '5000',
       agentText: '2',
       modelText: 'model-a, model-b',
-      field: 6,
+      agents: { installed: ['codex', 'claude'], off: ['codex'] },
+      field: 7,
       action: 'Save settings',
     },
   }).lines;
   assert.ok(settings.length <= 12);
   assert.match(settings.join('\n'), /› Sign out/);
   assert.match(settings.join('\n'), /Models {11}model-a, model-b/);
+  assert.match(settings.join('\n'), /Agents {11}Codex off · Claude Code on/);
   const any = chatFrame({
     ...base,
     settings: { value: state.settings, tokenText: '', agentText: '', modelText: '', field: 3, action: 'Save settings' },

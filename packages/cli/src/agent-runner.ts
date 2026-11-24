@@ -9,11 +9,14 @@ import {
   agentCommand,
   agentOutput,
   agentProfilePath,
-  detectAgentRuntime,
+  installedRuntimes,
   type Runtime,
   readAgentProfile,
-  runtimeSetting,
+  readAgentsOff,
+  runtimeNames,
+  runtimes,
   saveAgentProfile,
+  saveAgentsOff,
 } from './agent-session.js';
 import { configDirectory } from './config.js';
 import { commitWork, localRepository, prepareWorktree, repositoryForNewTask, taskWorktreeLocation } from './git.js';
@@ -31,15 +34,23 @@ export interface AgentRunnerOptions {
   // Where clqn was opened. Workers get their own Git worktree of it, never this checkout.
   project: string;
   spawn?: typeof nodeSpawn;
-  runtime?: () => Promise<Runtime>;
+  // The agent CLIs installed on this machine.
+  runtimes?: () => Promise<Runtime[]>;
   workspace?: (taskId: string) => Promise<string>;
   now?: () => number;
   // Connects as one of this member's agents.
   agentClient?: (profile: AgentProfile) => ClqnClient;
 }
+export interface AgentChoices {
+  installed: Runtime[];
+  off: Runtime[];
+}
 export interface AgentRunner {
   update(state: ChatState): void;
   status(): string | undefined;
+  // The agent CLIs on this machine and which are turned off. Changing them reconnects this member's workers.
+  choices(): Promise<AgentChoices>;
+  choose(off: Runtime[]): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -77,9 +88,9 @@ async function connect(
   if (agent) {
     const path = agentProfilePath(server, agent.id);
     const profile = await readAgentProfile(path).catch(() => undefined);
-    const chosen = runtimeSetting() ?? profile?.runtime ?? runtime;
-    if (await usable(options, profile, agent)) return { path, profile: profile!, runtime: chosen };
-    return remember(server, await api.rotateAgentToken(clanId, agent.id), chosen);
+    if (await usable(options, profile, agent)) return { path, profile: profile!, runtime };
+    // A new token also reactivates an agent that was turned off.
+    return remember(server, await api.rotateAgentToken(clanId, agent.id), runtime);
   }
   return remember(server, await register(), runtime);
 }
@@ -93,34 +104,53 @@ function handle(email: string) {
     .replace(/^-|-$/g, '');
 }
 
-// Connect this member's workers, plus the orchestrator when they lead the clan.
+// Connect a worker for each agent CLI the member has on, and turn off the ones they don't, so the orchestrator
+// only picks agents this machine will run. The leader also connects the orchestrator.
 async function prepare(options: AgentRunnerOptions) {
   const { api, clanId, server } = options;
   const user = await api.whoami();
-  const [{ agents }, { members }] = await Promise.all([api.listAgents(clanId), api.members(clanId)]);
-  const runtime = await (options.runtime ?? detectAgentRuntime)();
-  const mine = agents.filter((agent) => agent.ownerId === user.id && agent.active !== false);
-  const workers = new Map<string, Connection>();
-  for (const agent of mine.filter(({ role }) => role === 'worker')) {
+  const [{ agents }, { members }, installed, off] = await Promise.all([
+    api.listAgents(clanId),
+    api.members(clanId),
+    (options.runtimes ?? installedRuntimes)(),
+    readAgentsOff(),
+  ]);
+  if (!installed.length)
+    throw new Error('Install Claude Code or Codex to run agents. Make sure claude or codex is on PATH.');
+  const on = installed.filter((runtime) => !off.includes(runtime));
+  // Workers registered from this machine, by the runtime saved with their connection.
+  const local: (Connection & { agent: Listed })[] = [];
+  for (const agent of agents.filter(({ ownerId, role }) => ownerId === user.id && role === 'worker')) {
     const path = agentProfilePath(server, agent.id);
     const profile = await readAgentProfile(path).catch(() => undefined);
     if (profile && profile.clanId === clanId)
-      workers.set(agent.id, { path, profile, runtime: runtimeSetting() ?? profile.runtime ?? runtime });
+      local.push({ agent, path, profile, runtime: profile.runtime ?? installed[0]! });
   }
-  if (![...workers.values()].some((worker) => worker.runtime === runtime)) {
-    const name = handle(user.email);
-    const base = name ? `${runtime}-${name}` : runtime;
-    const alias = agents.some((agent) => agent.alias === base) ? `${base}-${randomBytes(3).toString('hex')}` : base;
-    const label = `${runtime === 'codex' ? 'Codex' : 'Claude Code'} (${name || user.email})`;
-    const worker = await connect(options, undefined, runtime, () => api.registerAgent(clanId, label, 'worker', alias));
-    workers.set(worker.profile.agentId, worker);
+  const workers = new Map<string, Connection>();
+  const name = handle(user.email);
+  for (const runtime of runtimes) {
+    const own = local.filter((worker) => worker.runtime === runtime);
+    const active = own.filter(({ agent }) => agent.active !== false);
+    if (!on.includes(runtime)) {
+      for (const { agent } of active) await api.revokeAgent(clanId, agent.id);
+    } else if (active.length) {
+      for (const worker of active) workers.set(worker.agent.id, worker);
+    } else {
+      const base = name ? `${runtime}-${name}` : runtime;
+      const alias = agents.some((agent) => agent.alias === base) ? `${base}-${randomBytes(3).toString('hex')}` : base;
+      const label = `${runtimeNames[runtime]} (${name || user.email})`;
+      const worker = await connect(options, own[0]?.agent, runtime, () =>
+        api.registerAgent(clanId, label, 'worker', alias),
+      );
+      workers.set(worker.profile.agentId, worker);
+    }
   }
   let orchestrator: Connection | undefined;
   if (members.find((member) => member.userId === user.id)?.role === 'leader') {
     const existing = agents.find((agent) => agent.role === 'orchestrator');
     if (!existing || existing.ownerId === user.id) {
       const alias = agents.some((agent) => agent.alias === 'orchestrator') ? undefined : 'orchestrator';
-      orchestrator = await connect(options, existing, runtime, () =>
+      orchestrator = await connect(options, existing, on[0] ?? installed[0]!, () =>
         api.registerAgent(clanId, 'Orchestrator', 'orchestrator', alias),
       );
     }
@@ -167,6 +197,8 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
   const attempted = new Set<string>();
   const workers = new Map<string, string>();
   let connections: Awaited<ReturnType<typeof prepare>> | undefined;
+  let latest: ChatState | undefined;
+  let generation = 0;
   let preparing = false;
   let preparedAt = -Infinity;
   let problem: string | undefined;
@@ -216,7 +248,7 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
     });
     log.end(`\n--- exit ${result.error ? message(result.error) : result.code}\n`);
     if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT')
-      problem = `Install ${connection.runtime === 'codex' ? 'Codex CLI' : 'Claude Code'} to run agents`;
+      problem = `Install ${runtimeNames[connection.runtime]} to run agents`;
     return { ok: result.code === 0, output: agentOutput(connection.runtime, stdout) };
   }
 
@@ -309,20 +341,25 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
   function update(state: ChatState) {
     if (stopped) return;
+    latest = state;
     if (!connections) {
       if (preparing || now() - preparedAt < retryAfter) return;
       preparing = true;
       preparedAt = now();
+      const current = generation;
       void prepare(options).then(
         (prepared) => {
+          preparing = false;
+          // Choices changed while connecting: connect again with the new ones.
+          if (current !== generation) return update(latest!);
           connections = prepared;
           problem = undefined;
-          preparing = false;
-          update(state);
+          update(latest!);
         },
         (error: unknown) => {
-          problem = `Agents off · ${message(error)}`;
           preparing = false;
+          if (current !== generation) return update(latest!);
+          problem = `Agents off · ${message(error)}`;
         },
       );
       return;
@@ -350,6 +387,19 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
           .filter(Boolean)
           .join(' · ') || undefined
       );
+    },
+    async choices() {
+      const [installed, off] = await Promise.all([(options.runtimes ?? installedRuntimes)(), readAgentsOff()]);
+      return { installed, off };
+    },
+    async choose(off) {
+      await saveAgentsOff(off);
+      // Running agents finish their tasks; the next update reconnects with the new choices.
+      generation++;
+      connections = undefined;
+      preparedAt = -Infinity;
+      if (problem?.startsWith('Agents off')) problem = undefined;
+      if (latest) update(latest);
     },
     async stop() {
       if (stopped) return;
