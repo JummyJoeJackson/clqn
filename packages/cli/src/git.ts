@@ -73,16 +73,16 @@ function ref(value: string): void {
     throw new Error('Use a plain Git branch name, not a revision expression or option');
   }
 }
-async function validateRepository(repository: RepositoryWork, cwd: string): Promise<void> {
+async function validateRepository(repository: RepositoryWork, cwd: string, signal?: AbortSignal): Promise<void> {
   slug(repository.slug);
   if (!shaPattern.test(repository.baseSha))
     throw new Error('Base SHA must be a full lowercase 40-character commit SHA');
   for (const branch of [repository.branch, repository.baseBranch]) {
     ref(branch);
-    await git(cwd, ['check-ref-format', '--branch', branch]);
+    await git(cwd, ['check-ref-format', '--branch', branch], signal);
   }
   if (repository.branch === repository.baseBranch) throw new Error('Task branch must differ from its base branch');
-  await verifyOrigin(cwd, repository.slug);
+  await verifyOrigin(cwd, repository.slug, signal);
 }
 async function verifyOrigin(cwd: string, expected: string, signal?: AbortSignal): Promise<void> {
   for (const args of [
@@ -342,30 +342,51 @@ export async function commitWork(cwd: string, message: string) {
   if (await git(path, ['status', '--porcelain=v1'])) await git(path, ['commit', '--quiet', '-m', message]);
 }
 
+async function checkedTaskHead(worktreePath: string, repository: RepositoryWork, signal?: AbortSignal) {
+  const cwd = await realpath(worktreePath);
+  await validateRepository(repository, cwd, signal);
+  const { branch, baseSha } = repository;
+  if ((await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], signal)) !== branch)
+    throw new Error('Working tree is not on the task branch');
+  if (await git(cwd, ['status', '--porcelain=v1', '--untracked-files=all'], signal))
+    throw new Error('Commit or remove task worktree changes before publishing');
+  const headSha = await git(cwd, ['rev-parse', 'HEAD'], signal);
+  if (!shaPattern.test(headSha)) throw new Error('Task branch does not resolve to a commit');
+  try {
+    await git(cwd, ['merge-base', '--is-ancestor', baseSha, headSha], signal);
+  } catch {
+    throw new Error('Task branch no longer contains the recorded base commit');
+  }
+  return { cwd, headSha };
+}
+
+export async function taskWorktreeChanges(worktreePath: string, repository: RepositoryWork) {
+  const { cwd, headSha } = await checkedTaskHead(worktreePath, repository);
+  if (headSha === repository.baseSha) return undefined;
+  const [baseTree, headTree] = (
+    await git(cwd, ['rev-parse', `${repository.baseSha}^{tree}`, `${headSha}^{tree}`])
+  ).split('\n');
+  return baseTree !== headTree ? headSha : undefined;
+}
+
 export async function publishWorktree(input: {
   worktreePath: string;
   repository: RepositoryWork;
   title: string;
   body?: string;
+  expectedHeadSha?: string;
+  signal?: AbortSignal;
 }) {
-  const cwd = await realpath(input.worktreePath);
-  await validateRepository(input.repository, cwd);
-  const { branch, baseBranch, baseSha } = input.repository;
-  if ((await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])) !== branch)
-    throw new Error('Working tree is not on the task branch');
-  if (await git(cwd, ['status', '--porcelain=v1', '--untracked-files=all']))
-    throw new Error('Commit or remove task worktree changes before publishing');
-  try {
-    await git(cwd, ['merge-base', '--is-ancestor', baseSha, 'HEAD']);
-  } catch {
-    throw new Error('Task branch no longer contains the recorded base commit');
-  }
-  const headSha = await git(cwd, ['rev-parse', 'HEAD']);
-  if (!shaPattern.test(headSha) || headSha === baseSha) throw new Error('Task branch has no commits beyond its base');
+  const { repository, signal } = input;
+  const { cwd, headSha } = await checkedTaskHead(input.worktreePath, repository, signal);
+  const { branch, baseBranch, baseSha } = repository;
+  if (headSha === baseSha) throw new Error('Task branch has no commits beyond its base');
+  if (input.expectedHeadSha !== undefined && input.expectedHeadSha !== headSha)
+    throw new Error('Task commit changed after the worker finished; inspect the worktree before publishing');
   if (!input.title.trim() || input.title.includes('\0') || input.body?.includes('\0'))
     throw new Error('Provide a nonempty pull request title without NUL');
-  await git(cwd, ['push', 'origin', `HEAD:refs/heads/${branch}`]);
-  const remote = await git(cwd, ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`]);
+  await git(cwd, ['push', 'origin', `${headSha}:refs/heads/${branch}`], signal);
+  const remote = await git(cwd, ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], signal);
   if (remote.split(/\s+/)[0] !== headSha)
     throw new Error('Remote task branch changed; inspect it before publishing the task result');
   const listed: unknown = JSON.parse(
@@ -386,6 +407,7 @@ export async function publishWorktree(input: {
         prFields,
       ],
       cwd,
+      signal,
     ),
   );
   if (!Array.isArray(listed) || listed.length > 1)
@@ -411,6 +433,7 @@ export async function publishWorktree(input: {
         input.body ?? '',
       ],
       cwd,
+      signal,
     );
     const match = createdUrl.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/i);
     if (!match || match[1]!.toLowerCase() !== slug(input.repository.slug))
@@ -421,6 +444,7 @@ export async function publishWorktree(input: {
           'gh',
           ['pr', 'view', match[2]!, '--repo', `github.com/${slug(input.repository.slug)}`, '--json', prFields],
           cwd,
+          signal,
         ),
       ),
       input.repository,

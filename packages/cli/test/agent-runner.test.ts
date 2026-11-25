@@ -1,13 +1,22 @@
 import assert from 'node:assert/strict';
-import type { ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, execFile, type spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { devNull, tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test, { type TestContext } from 'node:test';
-import type { ChatRun, ChatState, ClqnClient } from '@clqn/shared';
+import { promisify } from 'node:util';
+import type {
+  ChatRun,
+  ChatState,
+  ChatUsage,
+  ClqnClient,
+  RepositoryInput,
+  RepositoryReport,
+  TaskRepository,
+} from '@clqn/shared';
 import { startAgentRunner } from '../src/agent-runner.js';
 import { agentCommand, agentOutput, agentProfilePath, readAgentsOff, saveAgentProfile } from '../src/agent-session.js';
 
@@ -70,7 +79,7 @@ async function fixture(t: TestContext) {
 }
 
 async function until(condition: () => boolean) {
-  for (let i = 0; i < 200 && !condition(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  for (let i = 0; i < 1000 && !condition(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.ok(condition(), 'condition was not reached');
 }
 
@@ -268,6 +277,165 @@ test('approved runs start this member’s worker with its model, report usage, a
   assert.deepEqual(transitions.slice(2), [`claim ${second}`, `release ${second}`]);
   assert.match(runner.status() ?? '', /failed · Model not supported\.$/);
   await runner.stop();
+});
+
+test('a finished worker publishes its exact commit and reuses the PR after a failed API report and chat restart', async (t) => {
+  const f = await fixture(t);
+  const workerId = randomUUID();
+  const taskId = randomUUID();
+  const branch = `clqn/task-${taskId}`;
+  const slug = 'test/project';
+  const origin = `https://github.com/${slug}.git`;
+  const url = `https://github.com/${slug}/pull/7`;
+  const execute = promisify(execFile);
+  const actualGit = (await execute('which', ['git'])).stdout.trim();
+  const git = async (cwd: string, ...args: string[]) =>
+    (
+      await execute(actualGit, args, {
+        cwd,
+        env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' },
+      })
+    ).stdout.trim();
+  const remote = join(f.directory, 'remote.git');
+  const project = join(f.directory, 'project');
+  await git(f.directory, 'init', '--bare', '--initial-branch=main', remote);
+  await git(f.directory, 'clone', remote, project);
+  await git(project, 'config', 'user.email', 'test@example.com');
+  await git(project, 'config', 'user.name', 'Test');
+  await git(project, 'commit', '--allow-empty', '-m', 'Base');
+  const baseSha = await git(project, 'rev-parse', 'HEAD');
+  await git(project, 'push', 'origin', 'main');
+  await git(project, 'remote', 'set-url', 'origin', origin);
+  await writeFile(join(project, 'notes'), 'Uncommitted personal work');
+
+  const bin = join(f.directory, 'bin');
+  const marker = join(f.directory, 'pr-created');
+  await mkdir(bin);
+  // Redirect only Git transport to a local bare origin. Repository identity still uses the GitHub URL.
+  await writeFile(
+    join(bin, 'git'),
+    `#!${process.execPath}
+const { spawnSync } = require('node:child_process');
+const args = process.argv.slice(2);
+const transport = args.some(arg => ['ls-remote', 'fetch', 'push'].includes(arg));
+const config = transport ? ${JSON.stringify(['-c', `url.${remote}.insteadOf=${origin}`, '-c', 'protocol.file.allow=always'])} : [];
+const result = spawnSync(${JSON.stringify(actualGit)}, [...config, ...args], { stdio: 'inherit', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: ${JSON.stringify(devNull)} } });
+process.exit(result.status ?? 1);
+`,
+    { mode: 0o700 },
+  );
+  await writeFile(
+    join(bin, 'gh'),
+    String.raw`#!${process.execPath}
+const { execFileSync } = require('node:child_process');
+const { appendFileSync, existsSync } = require('node:fs');
+const marker = ${JSON.stringify(marker)};
+const pr = ${JSON.stringify({ number: 7, url, state: 'OPEN', headRefName: branch, headRepository: { nameWithOwner: slug }, baseRefName: 'main', isCrossRepository: false, mergeCommit: null, statusCheckRollup: [] })};
+pr.headRefOid = execFileSync(${JSON.stringify(actualGit)}, ['--git-dir', ${JSON.stringify(remote)}, 'rev-parse', ${JSON.stringify(`refs/heads/${branch}`)}], { encoding: 'utf8' }).trim();
+if (process.argv[2] !== 'pr') process.exit(1);
+switch (process.argv[3]) {
+  case 'list': console.log(JSON.stringify(existsSync(marker) ? [pr] : [])); break;
+  case 'create': appendFileSync(marker, 'created\n'); console.log(pr.url); break;
+  case 'view': console.log(JSON.stringify(pr)); break;
+  default: process.exit(1);
+}
+`,
+    { mode: 0o700 },
+  );
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${delimiter}${previousPath}`;
+  t.after(() => {
+    process.env.PATH = previousPath;
+  });
+
+  await saveAgentProfile({ agentId: workerId, clanId, server, token: token('w'), runtime: 'codex' });
+  const api = {
+    whoami: async () => ({ id: userId, email: 'member@example.com' }),
+    listAgents: async () => ({ agents: [agent(workerId, 'worker')] }),
+    members: async () => ({ members: [{ userId, role: 'member' }] }),
+    repositories: async () => ({ repositories: [{ slug }] }),
+  } as unknown as ClqnClient;
+  let repository: TaskRepository | null = null;
+  let bindCount = 0;
+  let reportCount = 0;
+  const transitions: string[] = [];
+  const results = new Map<string, string>();
+  const workerApi = {
+    transitionTask: async (_clan: string, _task: string, action: string) => transitions.push(action),
+    task: async () => ({ status: 'claimed', ownerAgentId: workerId, description: 'Fix the project', repository }),
+    bindChatTaskRepository: async (_clan: string, _task: string, input: RepositoryInput) => {
+      assert.deepEqual(input, { slug, branch, baseBranch: 'main', baseSha });
+      bindCount++;
+      repository = {
+        ...input,
+        baseBranch: 'main',
+        headSha: null,
+        prNumber: null,
+        prUrl: null,
+        mergeCommitSha: null,
+        state: 'pending',
+      };
+      return { repository };
+    },
+    reportTaskRepository: async (_clan: string, _task: string, report: RepositoryReport) => {
+      assert.equal(report.expectedHeadSha, null);
+      assert.equal(report.prUrl, url);
+      assert.equal(report.headSha, await git(remote, 'rev-parse', `refs/heads/${branch}`));
+      if (++reportCount === 1) throw new Error('Temporary request failure');
+      repository = { ...repository!, headSha: report.headSha, prNumber: 7, prUrl: url, state: 'open' };
+      return { repository };
+    },
+    reportChatUsage: async (_clan: string, _task: string, usage: ChatUsage) => {
+      if (usage.result) results.set(usage.result.id, usage.result.text);
+      return { ok: true };
+    },
+  } as unknown as ClqnClient;
+  const start = () =>
+    startAgentRunner({
+      api,
+      server,
+      clanId,
+      project,
+      spawn: f.spawn,
+      runtimes: async () => ['codex'],
+      now: f.now,
+      agentClient: () => workerApi,
+    });
+  const run: ChatRun = {
+    messageId: randomUUID(),
+    title: 'Fix project',
+    worker: 'Codex',
+    workerId,
+    estimatedTokens: 100,
+    taskId,
+    status: 'queued',
+    tokens: null,
+  };
+  const first = start();
+  t.after(() => first.stop());
+  first.update(chatState({ runs: [run] }));
+  await until(() => f.spawned.length === 1);
+  const { cwd, child } = f.spawned[0]!;
+  await writeFile(join(cwd, 'fix.txt'), 'Worker change');
+  child.finish(0, '{"type":"item.completed","item":{"type":"agent_message","text":"Fixed it."}}');
+  await until(() => Boolean(first.status()?.includes('Publishing will retry')));
+  assert.equal(reportCount, 1);
+  assert.deepEqual(transitions, ['claim']);
+  assert.deepEqual([...results.values()], ['Fixed it.']);
+  await first.stop();
+
+  const resumed = start();
+  t.after(() => resumed.stop());
+  resumed.update(chatState({ runs: [{ ...run, status: 'running', repository }] }));
+  await until(() => [...results.values()].some((text) => text.includes(url)));
+  assert.equal(bindCount, 1);
+  assert.equal(reportCount, 2);
+  assert.equal(f.spawned.length, 1);
+  assert.deepEqual(transitions, ['claim']);
+  assert.equal(await git(remote, 'show', `${branch}:fix.txt`), 'Worker change');
+  assert.equal(await git(project, 'rev-parse', 'HEAD'), baseSha);
+  assert.equal(await readFile(join(project, 'notes'), 'utf8'), 'Uncommitted personal work');
+  assert.equal(await readFile(marker, 'utf8'), 'created\n');
 });
 
 test('a member without Claude Code or Codex sees why agents are off', async (t) => {

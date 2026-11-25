@@ -214,7 +214,9 @@ test('publish pushes without force, creates or reuses the exact PR, and leaves t
   const pushes = commands.filter(({ file, args }) => file === 'git' && args.includes('push'));
   assert.equal(pushes.length, 2);
   assert.ok(
-    pushes.every(({ args }) => args.includes(`HEAD:refs/heads/${f.repository.branch}`) && !args.includes('--force')),
+    pushes.every(
+      ({ args }) => args.includes(`${headSha}:refs/heads/${f.repository.branch}`) && !args.includes('--force'),
+    ),
   );
   assert.equal(commands.filter(({ file, args }) => file === 'gh' && args[1] === 'create').length, 1);
   assert.ok(
