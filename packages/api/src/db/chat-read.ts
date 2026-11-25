@@ -3,12 +3,11 @@ import {
   type ChatMessage,
   type ChatRun,
   type ChatSettings,
-  chatTokenHistoryHours,
   defaultChatSettings,
 } from '@clqn/shared';
 import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { WorkspaceDb } from '../lib/access.js';
-import { chatMembers, chatMessages, chats, chatTokenHours } from './chat.js';
+import { chatMembers, chatMessages, chats } from './chat.js';
 import { agents, clans, linkedRepositories, users } from './schema.js';
 import { tasks } from './tasks.js';
 
@@ -97,19 +96,8 @@ export async function chatUsage(db: WorkspaceDb, clanId: string, userId: string)
 }
 
 export const currentChatHour = sql`date_trunc('hour', statement_timestamp(), 'UTC')`;
-export const firstChatHour = sql`${currentChatHour} - ${chatTokenHistoryHours - 1}::integer * interval '1 hour'`;
 // Keep a week of hourly token reports for the metrics tab.
 export const chatTokenRetention = sql`${currentChatHour} - ${7 * 24 - 1}::integer * interval '1 hour'`;
-
-export async function chatTokenHistory(db: WorkspaceDb, clanId: string) {
-  const rows = await db.execute<{ tokens: string }>(sql`
-    select coalesce(bucket.tokens, 0)::text as tokens
-    from generate_series(${firstChatHour}, ${currentChatHour}, interval '1 hour') as hours(hour)
-    left join ${chatTokenHours} as bucket on bucket.clan_id = ${clanId} and bucket.hour = hours.hour
-    order by hours.hour
-  `);
-  return rows.map(({ tokens }) => Number(tokens));
-}
 
 export async function workerBusy(db: WorkspaceDb, clanId: string, workerId: string) {
   const [busy] = await db

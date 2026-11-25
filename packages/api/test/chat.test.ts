@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { type ChatState, chatInboxSchema, chatStateSchema, defaultChatSettings, type SendChat } from '@clqn/shared';
+import {
+  type ChatState,
+  chatInboxSchema,
+  chatMetricsSchema,
+  chatStateSchema,
+  defaultChatSettings,
+  type SendChat,
+} from '@clqn/shared';
 import { createApp } from '../src/app.js';
 import { database, skip } from './postgres.js';
 
@@ -108,7 +115,6 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
   assert.equal((await state(member.token)).running, 1);
   const usage = `/tasks/${run.taskId}/usage`;
   assert.equal((await chat(otherWorker.token, usage, { tokens: 20 })).status, 403);
-  assert.deepEqual((await state(host.token)).reportedTokensByHour, Array(24).fill(0));
   await sql`insert into chat_token_hours values
     (${clan.id}, date_trunc('hour', now(), 'UTC') - interval '3 hours', 7),
     (${clan.id}, date_trunc('hour', now(), 'UTC') - interval '25 hours', 99)`;
@@ -124,7 +130,9 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
   assert.equal((await request(winner.token, `/tasks/${run.taskId}/complete`, {})).status, 200);
   active = await state(member.token);
   assert.deepEqual(active.usage, { tokens: 20, reserved: 0, agents: 0 });
-  const trend = (await state(host.token)).reportedTokensByHour!;
+  const metrics = await chat(host.token, '/metrics?window=24h');
+  assert.equal(metrics.status, 200);
+  const trend = chatMetricsSchema.parse(await metrics.json()).tokens;
   assert.equal(trend.length, 24);
   // The last two buckets cover a report even if the UTC hour turns during the test.
   assert.ok(trend.slice(-5, -2).includes(7));
@@ -134,10 +142,6 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
   );
   assert.equal(
     trend.reduce((sum, tokens) => sum + tokens, 0),
-    27,
-  );
-  assert.equal(
-    active.reportedTokensByHour?.reduce((sum, tokens) => sum + tokens, 0),
     27,
   );
   assert.equal(active.runs[0]?.status, 'done');

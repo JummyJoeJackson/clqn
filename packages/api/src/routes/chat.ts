@@ -30,7 +30,6 @@ import {
   chatInfo,
   chatMergeQueue,
   chatQueue,
-  chatTokenHistory,
   chatUsage,
   messageView,
 } from '../db/chat-read.js';
@@ -127,12 +126,11 @@ export function createChatRoutes(db: WorkspaceDb) {
     requirePersonal(actor);
     const membership = await requireClan(db, actor, clanId);
     const member = await requireChatMember(db, clanId, actor.id);
-    const [identity, history, activity, usage, reportedTokensByHour, mergeQueue] = await Promise.all([
+    const [identity, history, activity, usage, mergeQueue] = await Promise.all([
       chatIdentity(db, clanId),
       chatHistory(db, clanId),
       chatActivity(db, clanId, actor.id),
       chatUsage(db, clanId, actor.id),
-      chatTokenHistory(db, clanId),
       membership.role === 'leader' ? chatMergeQueue(db, clanId) : undefined,
     ]);
     const safeNumber = (value: bigint) => Math.min(Number(value), Number.MAX_SAFE_INTEGER);
@@ -142,7 +140,6 @@ export function createChatRoutes(db: WorkspaceDb) {
       ...history,
       ...activity,
       ...(mergeQueue ? { mergeQueue } : {}),
-      reportedTokensByHour,
       usage: { tokens: safeNumber(usage.tokens), reserved: safeNumber(usage.reserved), agents: usage.agents },
     });
   });

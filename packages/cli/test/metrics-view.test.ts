@@ -91,7 +91,6 @@ test('chat screen offers Ctrl+G metrics, drops the token graph, and settings fit
     queued: 0,
     running: 0,
     usage: { tokens: 0, reserved: 0, agents: 0 },
-    reportedTokensByHour: Array(24).fill(5),
   } satisfies ChatState;
   const base = {
     columns: 100,

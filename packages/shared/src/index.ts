@@ -1,6 +1,5 @@
 import {
   linkedRepositoriesSchema,
-  linkedRepositorySchema,
   linkedRepositorySetupSchema,
   linkRepositorySchema,
   unlinkedRepositorySchema,
@@ -9,7 +8,7 @@ import {
 export * from './repositories.js';
 
 import { z } from 'zod';
-import { eventsSchema, statsSchema, statusSchema } from './activity.js';
+import { eventsSchema, statusSchema } from './activity.js';
 import {
   actorSchema,
   agentRegistrationSchema,
@@ -397,14 +396,6 @@ export class ClqnClient {
       ).flatMap((page) => page.repositories),
     };
   }
-  repository(clanId: string, repositoryId: string, signal?: AbortSignal) {
-    return this.request(
-      `/v1/clans/${encodeURIComponent(clanId)}/repositories/${encodeURIComponent(repositoryId)}`,
-      linkedRepositorySchema,
-      undefined,
-      signal,
-    );
-  }
   unlinkRepository(clanId: string, repositoryId: string) {
     return this.request(
       `/v1/clans/${encodeURIComponent(clanId)}/repositories/${encodeURIComponent(repositoryId)}/unlink`,
@@ -531,9 +522,6 @@ export class ClqnClient {
       undefined,
       signal,
     );
-  }
-  stats(clanId: string) {
-    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/stats`, statsSchema);
   }
   status(clanId: string) {
     return this.request(`/v1/clans/${encodeURIComponent(clanId)}/status`, statusSchema);
