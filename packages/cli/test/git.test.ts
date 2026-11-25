@@ -72,7 +72,8 @@ const args = process.argv.slice(2);
 fs.appendFileSync(process.env.CLQN_TEST_LOG, JSON.stringify({file:'gh',args})+'\\n');
 const path = process.env.CLQN_TEST_PR;
 const pr = JSON.parse(fs.readFileSync(path, 'utf8'));
-if(args[1] === 'list') process.stdout.write(JSON.stringify(process.env.CLQN_TEST_PR_EXISTS === '1' ? [pr] : []));
+if(args[0] === 'repo' && args[1] === 'view') process.stdout.write(process.env.CLQN_TEST_DEFAULT_BRANCH ?? 'main');
+else if(args[1] === 'list') process.stdout.write(JSON.stringify(process.env.CLQN_TEST_PR_EXISTS === '1' ? [pr] : []));
 else if(args[1] === 'view') process.stdout.write(JSON.stringify(pr));
 else if(args[1] === 'create') process.stdout.write(pr.url+'\\n');
 else if(args[1] === 'merge') {
@@ -104,6 +105,7 @@ process.exit(result.status ?? 1);
   process.env.CLQN_TEST_PR = prPath;
   delete process.env.CLQN_TEST_PR_EXISTS;
   delete process.env.CLQN_TEST_MERGE_PENDING;
+  delete process.env.CLQN_TEST_DEFAULT_BRANCH;
   const repository = { slug: 'test/project', baseBranch: 'main', baseSha, branch: 'clqn/task-123' };
   const worktreePath = join(root, 'task');
   const pr = (headSha: string, overrides: Record<string, unknown> = {}) => ({
@@ -288,9 +290,27 @@ test('merge matches the reviewed head, respects pending queues, and reports only
   const input = { repository: f.repository, prNumber: 7, headSha: f.baseSha };
   await f.savePr(f.pr(f.baseSha, { statusCheckRollup: [] }));
   await assert.rejects(mergePullRequest(input), /at least one successful check/);
+  let approvalsChecked = 0;
+  const gated = {
+    ...input,
+    waitForChecks: true,
+    defaultBranchOnly: true,
+    beforeMerge: async () => {
+      approvalsChecked++;
+      throw new Error('Clan approval changed');
+    },
+  };
+  assert.equal((await mergePullRequest(gated)).checksPassed, false);
+  assert.equal(approvalsChecked, 0);
   await f.savePr(f.pr('b'.repeat(40)));
   await assert.rejects(mergePullRequest(input), /head changed/);
   await f.savePr(f.pr(f.baseSha));
+  process.env.CLQN_TEST_DEFAULT_BRANCH = 'trunk';
+  await assert.rejects(mergePullRequest(gated), /default branch/);
+  assert.equal(approvalsChecked, 0);
+  delete process.env.CLQN_TEST_DEFAULT_BRANCH;
+  await assert.rejects(mergePullRequest(gated), /Clan approval changed/);
+  assert.equal(approvalsChecked, 1);
   process.env.CLQN_TEST_MERGE_PENDING = '1';
   assert.equal((await mergePullRequest(input)).state, 'OPEN');
   delete process.env.CLQN_TEST_MERGE_PENDING;

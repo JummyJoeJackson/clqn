@@ -302,6 +302,7 @@ function checksPassed(pr: PullRequest): boolean {
 export async function inspectPullRequest(input: {
   repository: { slug: string; branch: string; baseBranch?: string };
   prNumber: number;
+  signal?: AbortSignal;
 }) {
   slug(input.repository.slug);
   ref(input.repository.branch);
@@ -309,15 +310,20 @@ export async function inspectPullRequest(input: {
     throw new Error('Pull request number must be a positive integer');
   const pr = parsePr(
     JSON.parse(
-      await command('gh', [
-        'pr',
-        'view',
-        String(input.prNumber),
-        '--repo',
-        `github.com/${slug(input.repository.slug)}`,
-        '--json',
-        prFields,
-      ]),
+      await command(
+        'gh',
+        [
+          'pr',
+          'view',
+          String(input.prNumber),
+          '--repo',
+          `github.com/${slug(input.repository.slug)}`,
+          '--json',
+          prFields,
+        ],
+        undefined,
+        input.signal,
+      ),
     ),
     input.repository,
     input.prNumber,
@@ -464,6 +470,10 @@ export async function mergePullRequest(input: {
   method?: (typeof mergeMethods)[number];
   // For repositories without CI. Pending or failing checks still block the merge.
   allowNoChecks?: boolean;
+  waitForChecks?: boolean;
+  defaultBranchOnly?: boolean;
+  beforeMerge?: () => Promise<void>;
+  signal?: AbortSignal;
 }) {
   if (!shaPattern.test(input.headSha)) throw new Error('Head SHA must be a full lowercase 40-character commit SHA');
   const method = input.method ?? 'squash';
@@ -473,20 +483,46 @@ export async function mergePullRequest(input: {
     throw new Error('Pull request head changed; review the new commit before merging');
   if (before.state === 'MERGED') return before;
   if (before.state !== 'OPEN') throw new Error('Pull request is closed without a merge');
-  if (!before.checksPassed && !(input.allowNoChecks && !before.checksReported))
+  if (!before.checksPassed && !(input.allowNoChecks && !before.checksReported)) {
+    if (input.waitForChecks) return before;
     throw new Error(
       'All reported checks must finish successfully before merging; at least one successful check is required unless --allow-no-checks is set and the repository reports none',
     );
-  await command('gh', [
-    'pr',
-    'merge',
-    String(input.prNumber),
-    '--repo',
-    `github.com/${slug(input.repository.slug)}`,
-    `--${method}`,
-    '--match-head-commit',
-    input.headSha,
-  ]);
+  }
+  if (input.defaultBranchOnly) {
+    const base = await command(
+      'gh',
+      [
+        'repo',
+        'view',
+        `github.com/${slug(input.repository.slug)}`,
+        '--json',
+        'defaultBranchRef',
+        '--jq',
+        '.defaultBranchRef.name',
+      ],
+      undefined,
+      input.signal,
+    );
+    if (!base || base !== input.repository.baseBranch)
+      throw new Error('Pull request no longer targets the repository’s default branch');
+  }
+  await input.beforeMerge?.();
+  await command(
+    'gh',
+    [
+      'pr',
+      'merge',
+      String(input.prNumber),
+      '--repo',
+      `github.com/${slug(input.repository.slug)}`,
+      `--${method}`,
+      '--match-head-commit',
+      input.headSha,
+    ],
+    undefined,
+    input.signal,
+  );
   const after = await inspectPullRequest(input);
   if (after.headSha !== input.headSha)
     throw new Error('Pull request head changed during merge; inspect the pull request before reporting integration');
