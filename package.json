@@ -19,6 +19,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "test": "node --conditions=clqn-source --import tsx --test --test-concurrency=1 packages/*/test/*.test.ts",
+    "test:coverage": "node --conditions=clqn-source --import tsx --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include='packages/*/src/**' --test-coverage-lines=88 --test-coverage-branches=82 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info packages/*/test/*.test.ts",
     "dev": "npm run dev --workspace @clqn/api",
     "cli": "node packages/cli/dist/index.js",
     "package:cli": "node scripts/package-cli.mjs",

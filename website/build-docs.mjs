@@ -3,12 +3,12 @@ import { Marked } from 'marked';
 
 const guides = [
   ['index', 'Getting started'],
-  ['chat', 'Shared clan chat'],
-  ['commands', 'Command reference'],
-  ['authentication', 'Authentication and clans'],
-  ['repositories', 'Repository workflow'],
-  ['webhooks', 'GitHub webhooks'],
+  ['chat', 'Chat and keys'],
   ['policies', 'Agent limits'],
+  ['repositories', 'Pull requests and main'],
+  ['commands', 'Commands'],
+  ['authentication', 'Accounts and clans'],
+  ['webhooks', 'GitHub webhooks'],
 ];
 // Operator guides (hosting, database) stay in the repository, not on the user site.
 const published = new Set(guides.map(([slug]) => slug));
@@ -28,8 +28,10 @@ const markdown = new Marked({
     },
   },
   walkTokens(token) {
+    // Guides reference shared images as assets/…; the site serves them one level up.
+    if (token.type === 'image' && token.href.startsWith('assets/')) token.href = `../${token.href}`;
     if (token.type !== 'link') return;
-    if (token.href === '../README.md#installation') token.href = '../download.html';
+    if (token.href === '../README.md#install') token.href = '../download.html';
     else
       token.href = token.href.replace(/^([\w-]+)\.md(?=#|$)/, (_, slug) =>
         published.has(slug) ? `../docs/${slug}.html` : `${repositoryDocs}${slug}.md`,

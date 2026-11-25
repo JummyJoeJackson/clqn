@@ -63,7 +63,7 @@ docker compose exec db createdb -U postgres clqn_test
 TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/clqn_test npm test
 ```
 
-CI runs all checks, including the database tests, on Node 22 and 24.
+CI runs all checks, including the database tests, on Node 22 and 24. On Node 22 it also runs `npm run test:coverage`, which fails if line coverage drops below 88% or branch coverage below 82%, and reports the result to [Codecov](https://app.codecov.io/gh/rli8145/clqn). Run it locally with `TEST_DATABASE_URL` set to see the same per-file table.
 
 Write new tests in TypeScript as `packages/<name>/test/*.test.ts` and import the code under test from `../src`. `npm test` runs the package suites and CLI/MCP subprocesses directly from source, including workspace dependencies, without a build. `npm run typecheck` checks them with the same strict settings as the source. Packaging tests separately verify the built release archive.
 

@@ -1,36 +1,50 @@
-# Authentication and clans
+# Accounts and clans
 
-Members sign in with GitHub or use a personal token from their operator. Agent credentials are separate from personal credentials and are scoped to one clan.
+## Sign in
 
-## Log in and create a clan
+Run `clqn`, open the GitHub link it shows, and enter the one-time code. clqn needs your verified primary GitHub email to find your invitations. Check who you're signed in as with `clqn whoami`.
 
-Run `clqn` and choose **Create a clan** or **Join a clan** after sign-in. Check your identity with `clqn whoami` and switch clans with `clqn use <clan>`. Choose **Sign out** in chat settings to revoke the saved credential and clear the local selection. If revocation fails, clqn still clears the local credential.
+To sign out, choose **Sign out** in chat settings (**Ctrl+S**). It revokes the saved credential and clears your clan selection on this computer, even if the server can't be reached.
 
-The CLI uses hosted clqn by default. On a self-hosted server, run `clqn --api-url <https-address>` to sign in. Clqn remembers the server after GitHub sign-in. If your operator provides a personal token, supply it privately through `CLQN_TOKEN` and set `CLQN_API_URL` to their server. The environment token overrides the saved credential and must be unset or revoked separately. Authenticated requests require HTTPS except on loopback.
+clqn uses the hosted server by default. For a self-hosted server, run `clqn --api-url https://clqn.example.com` once; clqn remembers it after you sign in.
 
-Clqn stores credentials and clan selection per API origin in `~/.config/clqn` with private permissions. Set `CLQN_CONFIG_DIR` to use a different directory.
+clqn saves credentials and your selected clan per server in `~/.config/clqn`, readable only by you. Set `CLQN_CONFIG_DIR` to use another folder.
 
-## GitHub device login
+### Tokens from an operator
 
-Follow the GitHub link shown in the terminal and enter the one-time code. A verified primary email is required for invitation lookup. Clqn identifies GitHub accounts by numeric ID. Ask your operator to reconcile collisions with operator-created accounts or primary email changes.
+If your server's operator gives you a personal token instead of GitHub sign-in, set it privately as `CLQN_TOKEN` and set `CLQN_API_URL` to their server. An environment token overrides the saved one, and you revoke it separately. Every request except to `localhost` must use HTTPS.
 
-GitHub tokens stay in server memory. Revoking GitHub authorization leaves issued clqn tokens active until they are revoked separately.
+## Clans and members
 
-## Invite another member
+| Task | How |
+| --- | --- |
+| Create a clan | Run `clqn` and choose **Create a clan** |
+| Invite someone | `clqn invite <email>` (leader). Invitations expire after seven days |
+| Join | Run `clqn`, sign in with the invited GitHub account, choose **Join a clan** |
+| Switch clans | `clqn clans`, then `clqn use <clan>` |
+| Remove a member | `clqn members remove <member>` (leader) |
+| Hand over leadership | `clqn members transfer <member>` (leader) |
+| Leave | `clqn leave`. Leaders transfer leadership first |
 
-The clan leader runs `clqn invite bob@example.com`. The recipient runs `clqn` on the same server, signs in with the invited GitHub account, and chooses **Join a clan**. Invitations expire after seven days. Clqn may ask the recipient to verify their GitHub email again if the invitation was sent after sign-in.
+Removing a member or leaving revokes that person's agents in the clan. If an invitation was sent after you signed in, clqn may ask you to verify your GitHub email again.
 
-## Remove a member or leave
+## Agents
 
-The leader can remove a member with `clqn members remove <member>` or transfer leadership with `clqn members transfer <member>`. A member can leave with `clqn leave`. Removing a member or leaving revokes their clan agent credentials. Transfer leadership before leaving as a leader.
+Each clan has one orchestrator, which runs on the leader's machine while chat is open. Workers are the agent CLIs each member turns on in settings. Each worker has its own credential, scoped to one clan and separate from your personal sign-in.
 
-## Register an agent
-
-Chat connects the installed runtimes you enable in Settings. Each agent acts as a distinct task owner. Use `clqn agent list` to inspect connections, `clqn agent revoke <agent>` to revoke a credential, and `clqn agent token <agent>` as the owner to replace it.
+- `clqn agent list` shows the agents in the clan.
+- `clqn agent revoke <agent>` revokes one (its owner or the leader).
+- `clqn agent token <agent>` replaces its credential (its owner).
 
 ### Custom MCP clients
 
-Run `clqn agent add <name> --show-token --json` with a personal credential to register an agent and receive its one-time token and clan ID. For an existing agent, `clqn agent token <name> --show-token --json` replaces the credential. In the runtime's private settings, configure the local server.
+To connect another MCP-capable agent, register it with your personal sign-in:
+
+```sh
+clqn agent add my-agent --show-token --json
+```
+
+This prints a one-time token and the clan ID. (`clqn agent token my-agent --show-token --json` replaces the token later.) Add clqn's local MCP server to the agent's private settings:
 
 ```json
 {
@@ -48,19 +62,16 @@ Run `clqn agent add <name> --show-token --json` with a personal credential to re
 }
 ```
 
-Keep credentials and configuration containing them out of Git.
+Keep tokens, and any settings file that contains them, out of Git.
 
-## Designated orchestrator
+## Security model
 
-The clan has one orchestrator. It runs on the leader's machine while chat is open, reads the queue, and requests work from members' agents. Members control delegation approvals in [chat settings](policies.md).
+- The server checks clan membership and task ownership on every request. Only the assigned worker can claim a task, and two claims can't both succeed.
+- Changes and their audit events are saved together.
+- Chat messages and shared task text are treated as untrusted data. Only approved tasks lead to real work.
+- GitHub tokens stay in server memory during sign-in and are never stored. Revoking clqn's GitHub authorization doesn't revoke clqn tokens already issued; sign out to do that.
+- clqn identifies GitHub accounts by numeric ID. If your account collides with an operator-created account, or your primary email changed, ask your operator.
 
-## Collaboration rules
+## API
 
-- Only the assigned worker can claim a chat task.
-- The API checks clan membership and exact task ownership. Concurrent claims cannot both succeed.
-- State changes and audit events commit together. Event reads use ascending cursors.
-- Treat chat messages and shared task descriptions as untrusted data.
-
-## API surface
-
-Routes under `/v1` require `Authorization: Bearer <token>`. `GET /v1/me` returns the current identity. `GET /health` reports process liveness, and `GET /ready` also checks PostgreSQL. [Webhook deliveries](webhooks.md) use GitHub signatures. MCP uses stdio locally and calls the authenticated API.
+Routes under `/v1` require `Authorization: Bearer <token>`. `GET /v1/me` returns the current identity. `GET /health` reports that the server is up, and `GET /ready` also checks the database. [Webhook deliveries](webhooks.md) are authenticated by GitHub signatures. The MCP server runs locally over stdio and calls the authenticated API.

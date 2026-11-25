@@ -9,6 +9,7 @@
 
 <p align="center">
 <a href="https://github.com/rli8145/clqn/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/rli8145/clqn/ci.yml?branch=main&style=for-the-badge" alt="Build status"></a>
+<a href="https://app.codecov.io/gh/rli8145/clqn"><img src="https://img.shields.io/codecov/c/github/rli8145/clqn?style=for-the-badge" alt="Test coverage"></a>
 <img src="https://img.shields.io/badge/node-%3E%3D22.12-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 22.12 or newer">
 <a href="https://npmjs.com/package/clqn-cli"><img src="https://img.shields.io/npm/v/clqn-cli?style=for-the-badge" alt="npm version"></a>
 <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT license"></a>
@@ -16,64 +17,67 @@
 
 ## Why clqn?
 
-Collaborating on long-horizon development tasks can get complicated quickly. Bloated context, merge conflicts, and unclear task ownership are common, especially when each collaborator works with several agents.
+When several people each run several agents on one repository, context drifts, branches collide, and nobody is sure who owns what. `clqn` is a shared, lightweight TUI for coordinating work across your team and its agents.
 
-Existing solutions introduce a lot of setup overhead. `clqn` is an extra lightweight CLI for people and their own AI agents to easily coordinate work.
+- **One chat.** Everyone's prompts go to the same orchestrator agent, in order.
+- **Your machine, your call.** Agents run on their owners' compute and only with their approval.
+- **Limits you set.** Cap your tokens, how many agents run at once, and which models they use.
+- **No plumbing.** Tasks, branches, and worktrees are handled for you. Your `main` is automatically synced.
 
-A **clan** is a shared chat for a team and its agents. The orchestrator runs on the leader's machine. Members choose which agents to make available and control what they can run.
-
-## Installation
-
-Install with npm (Node.js 22.12+):
+## Install
 
 ```sh
 npm install -g clqn-cli
 ```
 
-Alternatively, install with Homebrew:
+Or with Homebrew:
 
 ```sh
 brew tap rli8145/clqn https://github.com/rli8145/clqn
 brew install clqn
 ```
 
-## Quick start
+You'll need Node.js 22.12+, Git, the GitHub CLI (`gh`), and [Claude Code](https://claude.com/claude-code) or [Codex CLI](https://github.com/openai/codex).
 
-Install and sign in to Codex CLI or Claude Code and the GitHub CLI (`gh`). Run `clqn` from your GitHub clone. Sign in with GitHub, choose **Create a clan**, and accept the repository link prompt. Linking the webhook requires repository admin access.
+## Start a clan
 
-Use the invite command from another terminal.
+In your project's GitHub clone, run:
+
+```sh
+clqn
+```
+
+Sign in with GitHub, choose **Create a clan**, and say yes to linking the repository (this needs admin access to the repo).
+
+## Invite teammates
+
+From another terminal:
 
 ```sh
 clqn invite teammate@example.com
 ```
 
-Your teammate runs `clqn` from their clone, signs in with the GitHub account that received the invitation, and chooses **Join a clan**. Use `clqn clans` to list clans and `clqn use "My project"` to switch.
+Teammates run `clqn` in their own clone, sign in with the invited GitHub account, and choose **Join a clan**.
 
-## Chat with your clan
+## Work
 
-Run `clqn` to open the shared terminal chat. The clan leader starts the session and joins through the same screen. From the composer, members can give the orchestrator tasks or context, ask questions, and answer spawn approvals from the keyboard. [Chat setup and keybindings](docs/chat.md)
+<img src="docs/assets/demo.gif" width="1052" alt="A clqn chat: a member asks for rate limiting, the orchestrator splits it into two tasks, the member approves one, two workers run, and the result arrives as a pull request the leader approves">
 
-When a worker finishes code changes, clqn pushes the task branch and posts a pull request link to chat. Press **Ctrl+L** to find the PR. The clan leader reviews it and presses **Y** to approve that commit for merge. While the leader has chat open, clqn merges it after the GitHub checks pass. Members with chat open get the update in clean local default-branch checkouts. [Repository workflow](docs/repositories.md)
+Everyone freely prompts the orchestrator. When the orchestrator wants to start an agent on your machine, approve or decline with <kbd>Y</kbd>/<kbd>N</kbd>. Results and pull requests appear in the chat. As leader, press <kbd>Ctrl</kbd>+<kbd>L</kbd> to review a pull request and <kbd>Y</kbd> to approve the merge; clqn merges it once GitHub checks pass.
 
-## Run your own server
-
-Clone this repository and configure GitHub sign-in for the API. Docker Compose starts the server and its database on your machine.
-
-```sh
-docker compose --profile server up --build -d --wait
-clqn --api-url http://127.0.0.1:8080
-```
-
-To set up a shared server and enable GitHub sign-in for your team, follow the [hosting guide](docs/hosting.md).
+Press <kbd>Ctrl</kbd>+<kbd>S</kbd> for settings and <kbd>Ctrl</kbd>+<kbd>G</kbd> for graphs and metrics. See the [chat guide](docs/chat.md) for every key.
 
 ## Documentation
 
-- [Commands](docs/commands.md)
-- [Repository workflow](docs/repositories.md) · [GitHub notifications](docs/webhooks.md)
-- [Authentication](docs/authentication.md) · [Agent limits](docs/policies.md)
-- [Database setup](docs/database.md) · [Hosting](docs/hosting.md)
-- [Architecture and roadmap](ROADMAP.md)
+- [Getting started](docs/index.md) · [Chat and keys](docs/chat.md) · [Commands](docs/commands.md)
+- [Agent limits](docs/policies.md) · [Pull requests and syncing `main`](docs/repositories.md)
+- [Accounts, clans, and custom MCP clients](docs/authentication.md) · [GitHub webhooks](docs/webhooks.md)
+- Self-hosting: [run your own server](docs/hosting.md) · [database](docs/database.md)
 
 ## Contributing
 
-[Report an issue](https://github.com/rli8145/clqn/issues) or read the [contribution guide](CONTRIBUTING.md) before submitting a pull request.
+[Report an issue](https://github.com/rli8145/clqn/issues) or read the [contribution guide](CONTRIBUTING.md) before opening a pull request.
+
+## License
+
+[MIT](LICENSE.md)

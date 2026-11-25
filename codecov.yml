@@ -1,0 +1,10 @@
+# CI enforces the coverage minimum (npm run test:coverage); Codecov only reports.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+comment: false

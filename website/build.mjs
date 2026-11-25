@@ -15,7 +15,7 @@ for (const file of [
 ]) {
   await copyFile(new URL(file, site), new URL(file, output));
 }
-for (const file of ['logo.svg', 'wordmark.svg']) {
+for (const file of ['logo.svg', 'wordmark.svg', 'demo.gif']) {
   await copyFile(new URL(`../docs/assets/${file}`, site), new URL(`assets/${file}`, output));
 }
 await buildDocs(new URL('../docs/', site), new URL('docs/', output));

@@ -23,30 +23,30 @@ Each member sets their own:
 
 ## What's done
 
-- `clqn` is the only command: it signs you in with GitHub, offers "Create a clan" or "Join a clan" (with your pending invites), and opens the chat. "Sign out" is in settings (F2)
+- `clqn` is the only command: it signs you in with GitHub, offers "Create a clan" or "Join a clan" (with your pending invites), and opens the chat. "Sign out" is in settings (Ctrl+S)
 - Invite teammates by email
-- The chat screen: a full-screen chat, saved on the server, with an agents sidebar and settings (F2)
+- The chat screen: a full-screen chat, saved on the server, with an agents sidebar and settings (Ctrl+S)
 - Message queue in PostgreSQL: messages stay queued until the orchestrator handles them
-- One orchestrator per clan (the leader's). It starts in the background when the leader opens `clqn` and works the queue. Through MCP it replies, asks clarifying questions (answer with F4), and proposes work
-- Yes/no approvals in the chat (F3, then `y`/`n`), or automatic approval
+- One orchestrator per clan (the leader's). It starts in the background when the leader opens `clqn` and works the queue. Through MCP it replies, asks clarifying questions (answer with Ctrl+Q), and proposes work
+- Yes/no approvals in the chat (Ctrl+P, then `y`/`n`), or automatic approval
 - Approved agents start in the background on the member's machine, with the approved model
-- Limits: new members pick Full access (no limits) or Custom when they join; edit token, agent-count, and model limits in F2. All are enforced before each delegation
+- Limits: new members pick Full access (no limits) or Custom when they join; edit token, agent-count, and model limits in settings (Ctrl+S). All are enforced before each delegation
 - Live sidebar: each delegation's task, worker, status, and tokens
-- Metrics tab (F5): tokens and active agents over time, tokens by member and by task, and queue wait, over 24h or 7d
+- Metrics view (Ctrl+G): tokens and active agents over time, tokens by member and by task, and queue wait, over 24h or 7d
 - GitHub repository linking during chat setup. Signed push webhooks and a slow fallback keep clean default-branch checkouts current while chat is open
 - Worker branches and PRs are published to the linked repository. Clan-leader approval and passing GitHub checks gate merges, and the clan can follow the PR from chat
 - The API runs on Google Cloud (Cloud Run + PostgreSQL)
-- Choose your agents: settings (F2) list the agent CLIs on your machine (Claude Code, Codex), each on or off. Each one that's on is a worker the orchestrator can pick
+- Choose your agents: settings (Ctrl+S) list the agent CLIs on your machine (Claude Code, Codex), each on or off. Each one that's on is a worker the orchestrator can pick
+- User-focused README with a demo GIF, and docs and website matched to the current chat keys and settings
 
 ## What's next
 
-- **Update documentation (README - concise, user focused), website**
+- Nothing queued. Pick from **Later**.
 
 ## Later
 
 - **Turn `main` protection back on.** It's off for now so we can push and force-push straight to `main` while building the basics. Turn the branch protection rules back on before the first real release.
-- **Terminal too small.** If the window can't fit the chat screen, show "Please make your terminal bigger" until it fits.
-- **Orchestrator handoffs** between users if host leaves. 
+- **clqn logo in TUI**
 
 ## Ground rules
 

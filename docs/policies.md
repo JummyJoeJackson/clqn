@@ -1,11 +1,15 @@
 # Agent limits
 
-Choose **Full access** or **Custom** when you create or join a clan. Edit your limits later in **Settings** (**F2** or **Ctrl+S**).
+Nothing runs on your machine without your say. When you create or join a clan, choose **Full access** (no limits) or **Custom**. Change your limits any time in settings (**Ctrl+S**).
 
-- **Token limit** caps usage across your workers in the clan. See [how tokens are counted](chat.md#how-tokens-are-counted).
-- **Agent count** limits how many tasks can run at once on your machine.
-- **Allowed models** restricts delegations to the model IDs you enter. An empty list allows any model.
+| Limit | What it caps |
+| --- | --- |
+| Token limit | Total tokens your agents can use in this clan. See [how tokens are counted](chat.md#how-tokens-are-counted) |
+| Agent limit | How many of your agents can run at once |
+| Models | Which model IDs your agents may use. Blank allows any |
 
-Spawn approval defaults to manual. Automatic approval still enforces your saved limits. Settings also controls which installed agents are available and whether workers can run commands.
+clqn checks your limits before every task. A queued or running task holds its estimated tokens and an agent slot until it finishes.
 
-[Chat settings and approvals](chat.md)
+Spawn approval is **Manual** by default, so you approve each agent before it starts. With **Automatic**, tasks that fit your limits start without asking.
+
+Settings also choose which installed agents (Claude Code, Codex) to offer and what commands workers may run. See [settings](chat.md#settings).

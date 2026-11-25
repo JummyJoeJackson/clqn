@@ -1,19 +1,36 @@
 # Getting started
 
-[Install clqn](../README.md#installation) and sign in to Codex CLI or Claude Code. Run `clqn` in your project clone.
+clqn is one terminal chat for your team and its AI agents. You ask the orchestrator for work, it splits the work into tasks, and your teammates' agents do them once each owner approves.
+
+![A clqn chat session from request to approved pull request](assets/demo.gif)
+
+## Before you begin
+
+[Install clqn](../README.md#install), then make sure you have:
+
+- Git, and the GitHub CLI (`gh`) signed in with push access to the repository
+- Claude Code or Codex CLI, installed and signed in
 
 ## Sign in
 
-Open the GitHub link displayed in the terminal and enter the one-time code. clqn uses the hosted server by default. For a self-hosted instance, run `clqn --api-url https://clqn.example.com`.
+Run `clqn` in your project's GitHub clone. Open the GitHub link it shows and enter the one-time code. clqn uses the hosted server unless you choose another one with `clqn --api-url https://clqn.example.com`.
 
 ## Create or join a clan
 
-Choose **Create a clan**, then use `clqn invite teammate@example.com` in another terminal. Your teammate runs `clqn`, signs in with the GitHub account that received the invitation, and chooses **Join a clan**.
+A clan is your team's shared chat. Choose **Create a clan** and name it (the folder name is the default). Say yes when clqn offers to link the repository. Linking needs admin access to the GitHub repository. Then invite teammates from another terminal:
 
-Use `clqn clans` to list your clans and `clqn use "My project"` to switch.
+```sh
+clqn invite teammate@example.com
+```
 
-## Connect an agent
+Your teammate runs `clqn` in their clone, signs in with the GitHub account for that email, and chooses **Join a clan**. Invitations expire after seven days.
 
-Chat connects the orchestrator on the leader's machine and workers on each member's machine. Press **F2** or **Ctrl+S** to choose which installed agents to use and set their [limits](policies.md).
+When you create or join a clan, choose **Full access** or **Custom** [limits](policies.md) for agents on your machine.
 
-[Chat keys and workflow](chat.md) · [Repository setup](repositories.md) · [Authentication and custom MCP clients](authentication.md)
+## Use the chat
+
+Type a request, question, or piece of context and press **Enter**. The orchestrator answers below your message and, when it needs an agent on your machine, asks for your approval. See [chat and keys](chat.md).
+
+Press **Ctrl+S** to open settings, where you choose which installed agents (Claude Code, Codex) to offer and change your limits.
+
+If you're in more than one clan, list them with `clqn clans` and switch with `clqn use "My project"`.

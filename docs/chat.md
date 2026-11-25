@@ -1,35 +1,65 @@
-# Shared clan chat
+# Chat and keys
 
-Run `clqn` from the project clone, sign in with GitHub, and create or join a clan. The clan leader can link the current GitHub repository during setup and starts the shared session. Members join from the same screen. The transcript stays with the clan between terminal sessions.
+Run `clqn` in your project clone. Everyone in the clan sees the same chat, and it's saved between sessions. The chat runs on the leader's machine: the leader's `clqn` starts the orchestrator, so keep it open while the team works.
 
-Type a task, question, or project context and press **Enter**. Messages remain queued until the orchestrator picks them up. It handles one at a time, oldest first, and everyone sees the one in hand as Processing. Each answer appears below the message it answers. The orchestrator keeps one session for 20 messages, so it remembers the conversation: Claude Code stays open between messages, and Codex starts a run per message that resumes the same session. The agent pane shows each delegation's task, worker, status, and reported tokens. A tilde marks estimated usage.
+## Send a message
 
-The metrics view shows reported tokens and active agents over 24 hours or seven days.
+Type a task, question, or piece of project context and press **Enter**. Messages wait in a queue. The orchestrator handles one at a time, oldest first, and shows the one it's working on as **Processing**. Its answer appears right below your message.
+
+The orchestrator remembers the conversation for 20 messages, then starts a fresh session.
+
+If the orchestrator needs more detail, a question appears above the composer. Press **Ctrl+Q**, type your answer, and press **Enter**.
+
+## Approve agents
+
+When the orchestrator wants to start an agent on your machine, you see a **Spawn** line with the task, model, and estimated tokens. Press **Ctrl+P** to focus it, use **↑ ↓** to choose if there are several, then press **Y** to approve or **N** to decline.
+
+To approve automatically, set **Spawn approval** to **Automatic** in settings. Your [limits](policies.md) apply either way.
+
+The **Agents** panel on the right lists each task with its worker, status, and tokens. A tilde (`~40k`) marks an estimate until the worker reports real usage.
+
+## Review pull requests
+
+When a worker finishes code changes, clqn commits them on the task's own branch, pushes, opens a pull request, and posts the link in chat. Press **Ctrl+L** to see pull requests. The clan leader reviews the PR on GitHub, then presses **Y** to approve the merge or **N** to decline. clqn merges once the GitHub checks pass. See the [repository workflow](repositories.md).
+
+## Keys
+
+On macOS, use the **Ctrl** keys: function keys usually control brightness and volume unless you hold **fn**.
 
 | Key | Action |
 | --- | --- |
-| F2 | Open session settings. Use the arrow keys to move between fields and change approval mode. |
-| F3 or Tab | Focus a spawn proposal. Use the arrow keys to choose one, then press **Y** to approve or **N** to decline. |
-| F4 | Reply to a clarification. Press it again to choose a different question. |
-| Ctrl+G or F5 | View clan metrics. |
-| Ctrl+L or F6 | Find a worker’s pull request. Use the arrow keys to choose one. The clan leader presses **Y** to approve a reviewed commit or **N** to decline it. |
-| Page Up / Page Down | Scroll the transcript. Press **End** to return to the latest messages. |
-| Ctrl+C | Close the terminal session. |
+| Enter | Send your message |
+| Ctrl+P (F3, Tab) | Focus spawn approvals. **↑ ↓** to choose, **Y** approve, **N** decline, **Esc** back |
+| Ctrl+Q (F4) | Reply to the orchestrator's question. Press again to pick another question |
+| Ctrl+L (F6) | Pull requests. The leader presses **Y** to approve a merge or **N** to decline |
+| Ctrl+S (F2) | Settings |
+| Ctrl+G (F5) | Metrics. **T** or **Tab** switches between 24 hours and 7 days |
+| ↑ ↓, Page Up, Page Down | Scroll chat history. **End** jumps back to the latest |
+| Ctrl+R | Retry a message that failed to send |
+| Ctrl+C | Quit |
 
-New members choose full access or custom limits during setup. Spawn approval defaults to manual. Both approval modes enforce the worker owner's saved limits. Queued assignments reserve an agent slot and their estimated tokens. Reported usage draws down the budget, and finished work without a report counts at its estimate.
+## Settings
+
+Press **Ctrl+S**. Move with **↑ ↓**, change a value with **← →**, type numbers or model names, then choose **Save settings**.
+
+| Setting | What it does |
+| --- | --- |
+| Spawn approval | **Manual** (default) asks before each agent starts. **Automatic** approves within your limits |
+| Token limit | Total tokens your agents can use in this clan. `none` for no limit |
+| Agent limit | How many of your agents can run at once. `none` for no limit |
+| Models | Comma-separated model IDs your agents may use. Blank allows any |
+| Worker commands | What your agents may run: **Off**, **Sandboxed** (default, inside the agent's sandbox), or **Unrestricted** |
+| Agents | Which installed agent CLIs (Claude Code, Codex) the orchestrator can use |
+| Sign out | Revoke this computer's sign-in |
+
+## Metrics
+
+Press **Ctrl+G** for tokens and active agents over time, tokens by member and by task, and how long messages waited in the queue.
 
 ## How tokens are counted
 
-A worker's tokens are its input, cache writes, and output, summed over the run. Cache reads are left out. Each API call resends the whole conversation, mostly from the prompt cache. Counting those reads would count the same context again on every call, and they are a small part of the cost. A short task therefore reports close to the context size Claude Code shows. Longer tasks report more, as each call adds new input and output. For Codex, cached input is subtracted from its input tokens.
+A worker's tokens are its input, cache writes, and output, summed over the run. Cache reads are left out: each call resends the whole conversation, mostly from the prompt cache, so counting those reads would count the same context again on every call. For Codex, cached input is subtracted from input tokens.
 
-Tokens are not dollars. Cache writes and output cost more per token than plain input. Orchestrator runs are not counted.
+Tokens are not dollars: cache writes and output cost more per token than plain input. Orchestrator runs are not counted.
 
-## Review code and sync main
-
-Chat starts the orchestrator on the leader’s machine and approved workers on their owners’ machines. A worker’s code is committed in its own worktree, pushed to the linked repository, and posted in chat with a pull request link. The worker needs Git push access and an authenticated `gh` session to open the PR.
-
-The clan leader opens the PR to review the commit shown in chat, then approves it in **Ctrl+L**. Keep the leader’s chat open so it can merge once all reported checks finish successfully and at least one passes. GitHub applies its normal repository merge rules.
-
-With chat open from a linked clone, signed GitHub push notifications trigger a fast-forward of the clean local default branch. Sync also runs at startup and every five minutes as a fallback. [Repository workflow](repositories.md)
-
-The Cloud Run API stores the transcript, proposals, and settings in PostgreSQL. Apply the [release migrations](hosting.md#migrate-then-deploy) before deploying the updated API.
+While a task is queued or running, its estimate is reserved against your token limit. When the worker reports usage, the real count replaces the estimate. Finished work with no report counts at its estimate.

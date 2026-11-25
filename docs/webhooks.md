@@ -1,10 +1,10 @@
-# GitHub main notifications
+# GitHub webhooks
 
-Signed GitHub push webhooks record `repository.main_changed` events for the repository's default branch. Signed pull request webhooks [confirm task merges](repositories.md#events-and-the-trust-boundary). Open chat and connected MCP clients use these events for [safe local sync](repositories.md#automatically-sync-only-main), with startup and five-minute fallback fetches.
+A linked repository sends clqn signed GitHub webhooks. Push events to the default branch tell open chats to [sync main](repositories.md#keeping-main-current) right away, and pull request events [confirm merges](repositories.md#how-merges-are-recorded). Without webhooks, clqn still syncs at startup and every five minutes.
 
 ## Link a repository
 
-Your operator must enable webhook support on the API. The clan leader can link the current clone during chat setup with local `gh` authentication and repository admin access. These commands manage the same link.
+The server must have webhooks enabled (self-hosters: see [webhook server setup](hosting.md#webhook-server-setup)). The clan leader links the clone when creating the clan, using their `gh` sign-in and repository admin access. These commands manage the same link:
 
 ```sh
 clqn repo link                 # infer current origin

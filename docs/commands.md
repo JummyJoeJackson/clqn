@@ -1,24 +1,38 @@
 # Commands
 
-Run `clqn` to sign in, choose a clan, and open chat. Chat handles work requests, approvals, agent settings, and sign-out. See the [chat guide](chat.md) for keys and settings.
+Most of the time you only need `clqn`: it signs you in, lets you pick or create a clan, and opens the [chat](chat.md). Everything else is done from the chat. These commands cover setup the chat doesn't handle.
 
-| Command | Purpose |
+| Command | What it does |
 | --- | --- |
-| `clqn whoami` | Show the current identity |
-| `clqn health` | Check API liveness |
-| `clqn clans` / `clqn use <clan>` | List or select a clan |
-| `clqn invite <email>` | Invite a teammate as clan leader |
-| `clqn members` | List members |
-| `clqn members remove <member>` / `clqn members transfer <member>` | Remove a member or transfer leadership as clan leader |
-| `clqn leave` | Leave the current clan as a member |
-| `clqn agent add <name>` / `clqn agent list` | Register or list agent connections |
-| `clqn agent revoke <agent>` / `clqn agent token <agent>` | Revoke or refresh an agent credential |
-| `clqn repo link` / `clqn repo list` / `clqn repo unlink` | Manage [GitHub repository links](webhooks.md) |
+| `clqn` | Sign in, choose a clan, and open the chat |
+| `clqn whoami` | Show who you're signed in as |
+| `clqn clans` | List your clans |
+| `clqn use <clan>` | Switch to another clan by name |
+| `clqn invite <email>` | Invite someone to your clan (leader only) |
+| `clqn members` | List clan members |
+| `clqn members remove <member>` | Remove a member by email (leader only) |
+| `clqn members transfer <member>` | Make another member the leader (leader only) |
+| `clqn leave` | Leave the clan (the leader must transfer leadership first) |
+| `clqn repo link [owner/repo]` | Link a GitHub repository to the clan (leader only) |
+| `clqn repo list` | List linked repositories |
+| `clqn repo unlink [owner/repo]` | Unlink a repository and remove its webhook (leader only) |
+| `clqn agent list` | List agent connections |
+| `clqn agent add <name>` | Register an agent for a [custom MCP client](authentication.md#custom-mcp-clients) |
+| `clqn agent revoke <agent>` | Revoke an agent's credential |
+| `clqn agent token <agent>` | Replace an agent's credential |
+| `clqn health` | Check that the server is up |
 
-Use `clqn <command> --help` for options. Most clan commands accept `--clan <id>` to override the selected clan. Use `--api-url <url>` to choose a server and `--json` for machine-readable command output.
+## Options
 
-Git and GitHub CLI failures show a short message. Add `--verbose` or set `CLQN_VERBOSE=1` to include redacted diagnostics.
+| Option | What it does |
+| --- | --- |
+| `--clan <id>` | Run a clan command on another clan than the selected one |
+| `--api-url <url>` | Use a different clqn server |
+| `--json` | Print machine-readable JSON |
+| `--verbose` | Show Git and GitHub CLI error output, with credentials redacted (or set `CLQN_VERBOSE=1`) |
+
+Run `clqn <command> --help` for every option.
 
 ## API list pagination
 
-Use `?limit=1..200` on paginated lists and pass the returned `nextCursor` as `after` to continue. Most lists default to 100 items. Context cursors use keys. Task and other resource cursors use UUIDs. Clqn follows pages automatically for CLI list commands.
+For scripts calling the API directly: paginated lists accept `?limit=1..200` (most default to 100). Pass the returned `nextCursor` as `after` to get the next page. CLI list commands follow pages for you.

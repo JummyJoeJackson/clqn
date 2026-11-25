@@ -1,31 +1,31 @@
-# Repository workflow
+# Pull requests and syncing main
 
-Agents prepare and publish code locally with Git on their members' machines. The clan API stores assignments and reported commit and PR results.
+Agents do their work with Git on their owners' machines. The clqn server only records who's doing what and the resulting commits and pull requests. GitHub credentials never leave your machine.
 
-## Set up the participants
+## What each person needs
 
-Install Git and `gh` and authenticate locally. Workers need push and PR access. The clan leader needs repository admin access to configure the webhook and merge permission to integrate approved work.
+- **Everyone:** Git and the GitHub CLI (`gh`), signed in. Run `clqn` from a GitHub clone of the project.
+- **Members with workers:** push access, so their agents can push branches and open pull requests.
+- **Clan leader:** admin access to link the repository (it sets up a webhook), and merge access to merge approved work.
 
-Open `clqn` from your GitHub clone. The clan leader can link the repository during setup. Chat connects the orchestrator and the selected worker agents on each member's machine. [Shared clan chat](chat.md)
+The leader links the repository when creating the clan. To link or repair it later, run `clqn repo link` from the clone. See [GitHub webhooks](webhooks.md).
 
-## Automatically sync only main
+## From request to merge
 
-Open chat syncs the linked repository. Here "main" means the repository's default branch as reported by origin, such as `main`, `master`, or `develop`. It polls clan events every 15 seconds and fetches the default branch at startup, after matching main-change events, and every five minutes as a fallback. API failures back off while the Git fallback continues. Sync status appears in chat.
+1. You ask for work in chat. The orchestrator turns it into tasks.
+2. Each worker's owner approves (or has automatic approval on). The worker starts in its own worktree on its own task branch, so your checkout is never touched.
+3. When the worker finishes, clqn commits, pushes the branch, opens a pull request, and posts the link in chat.
+4. The leader reviews the PR on GitHub, then approves that commit in chat (**Ctrl+L**, then **Y**).
+5. While the leader's chat is open, clqn merges once the GitHub checks pass and GitHub allows the merge. If the branch changes after approval, it needs approval again.
 
-Sync finds the main worktree even from a feature worktree. It fast-forwards only clean main; if none is checked out, it only fetches. Dirty, locally ahead, diverged, or busy checkouts are skipped. Ignored-file collisions fail. It never stashes, resets, rebases, or changes task branches.
+## Keeping main current
 
-After resolving a skipped update, reopen chat or wait for the fallback or another notification. For links that need repair, run `clqn repo link` as the leader from the clone. [GitHub notifications](webhooks.md)
+While chat is open, clqn keeps your local default branch (`main`, `master`, or whatever GitHub reports) up to date. A GitHub notification triggers a fetch and fast-forward right after someone pushes. As a fallback, clqn also fetches at startup and every five minutes.
 
-## Tasks
+clqn only fast-forwards a clean checkout of the default branch, even if you're working in another worktree. It skips a checkout that has uncommitted changes, local commits, or diverged history, and never stashes, resets, rebases, or touches your task branches. If no worktree has the default branch checked out, it only fetches. Sync status appears in chat.
 
-Ask for work in chat. The orchestrator turns it into tasks, and each worker owner's approval settings control whether an agent can start on their machine.
+After you fix a skipped update, reopen chat or wait for the next push or fallback.
 
-Work happens in a separate worktree on a pinned task branch. When a worker finishes code changes, clqn commits and pushes the result, opens a pull request, and posts its link in chat. Open **Ctrl+L** to find the PR and its recorded commit.
+## How merges are recorded
 
-The clan leader approves that commit in the PR view. While the leader has chat open, clqn merges after the GitHub checks pass and GitHub permits the merge. A changed head needs fresh approval. The merge is recorded even if the worker is offline.
-
-## Events and the trust boundary
-
-Clan events record assignments, repository reports, approvals, integrations, and main changes. GitHub credentials stay local to the members' machines.
-
-Once a repository link has received a signed pull request event, GitHub confirms merges through that webhook. A matching confirmation records the PR and commit and completes the chat task. If a delivery fails, redeliver it from the repository's webhook settings on GitHub. For older links that only receive push events, clqn can record a merge after the leader’s CLI verifies it with GitHub.
+Clan events record assignments, pull requests, approvals, merges, and changes to main. Once the repository's webhook delivers a signed pull request event, a merge on GitHub completes the matching task in chat. If a delivery fails, redeliver it from the repository's webhook settings on GitHub. For older links that only receive push events, clqn records a merge after the leader's clqn checks it with GitHub; run `clqn repo link` again to upgrade the link.

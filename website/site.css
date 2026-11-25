@@ -95,6 +95,7 @@ code { font: inherit; }
 .reader article :is(ul, ol) { padding-left: 1.4rem; color: var(--muted); }
 .reader article :not(pre) > code { font: .88em var(--mono); color: var(--text); background: #25272c; padding: .1em .25em; border-radius: 3px; }
 .reader pre { background: var(--surface); }
+.reader article img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
 .reader table { display: block; overflow-x: auto; border-collapse: collapse; font-size: .9rem; }
 .reader th, .reader td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .skip-docs { position: absolute; left: 12px; top: 0; transform: translateY(-130%); padding: 6px 12px; background: var(--surface); }

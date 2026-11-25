@@ -174,7 +174,7 @@ export async function chooseLimits(api: ClqnClient, clanId: string, ask: Ask, pr
     };
   }
   await api.saveChatSettings(clanId, settings);
-  print('Saved. Change your limits later with F2 in the chat.');
+  print('Saved. Change your limits later with Ctrl+S in the chat.');
 }
 
 interface ChooseClan {

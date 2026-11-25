@@ -1,6 +1,6 @@
 # Hosting
 
-The CLI and agent connection run locally. A clqn server stores the shared workspaces that everyone connects to. Run it with Docker Compose for a local trial or deploy it to Cloud Run with managed Cloud SQL PostgreSQL for a team.
+The CLI and agent connection run locally. A clqn server stores the clans, chats, and tasks that everyone connects to. Run it with Docker Compose for a local trial or deploy it to Cloud Run with managed Cloud SQL PostgreSQL for a team.
 
 ## Self-host with Docker Compose
 
@@ -45,7 +45,7 @@ Rotating the root key changes every link secret. Update all API instances, then 
 
 ## GitHub OAuth App
 
-Create a dedicated GitHub OAuth App with **Device Flow** enabled. Set its homepage to the project site and required callback URL to the API origin; device flow uses no callback route. Set `GITHUB_CLIENT_ID` on the API and apply migrations before deployment. Users then sign in as described in [GitHub device login](authentication.md#github-device-login). No client secret or repository permissions are needed. Leave the ID unset to disable new logins.
+Create a dedicated GitHub OAuth App with **Device Flow** enabled. Set its homepage to the project site and required callback URL to the API origin; device flow uses no callback route. Set `GITHUB_CLIENT_ID` on the API and apply migrations before deployment. Users then sign in as described in [Sign in](authentication.md#sign-in). No client secret or repository permissions are needed. Leave the ID unset to disable new logins.
 
 Enabling login allows any qualifying GitHub user to create an account, but grants no clan membership. The API has process-local admission and polling limits, including 10 login starts per minute per client address (the last `X-Forwarded-For` entry, which Cloud Run sets). Behind an additional load balancer, that entry is the balancer, so clients share one limit. Configure edge rate limits before broad public signup. Keep authentication bodies out of logs.
 

@@ -32,7 +32,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
-      - run: npm test
+      # Node 22 measures coverage, fails below the minimum, and reports it to Codecov.
+      - run: npm run ${{ matrix.node == 22 && 'test:coverage' || 'test' }}
+      - name: Upload coverage
+        if: matrix.node == 22
+        uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
       - run: npm run typecheck
       - run: npm run package:cli
       - run: npm run test:package
