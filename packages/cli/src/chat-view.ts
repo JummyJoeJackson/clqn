@@ -85,8 +85,9 @@ interface View {
   host?: string | undefined;
   userId: string;
   state?: ChatState | undefined;
-  // Animation frame for queued messages while the orchestrator works.
-  shimmer?: number | undefined;
+  // Queued messages the orchestrator is handling, shown as Processing on animation frame `frame`.
+  processing?: ReadonlySet<string> | undefined;
+  frame?: number | undefined;
   messages: ChatMessage[];
   settings?: SettingsView | undefined;
   draft: string;
@@ -117,17 +118,23 @@ export function messageLines(
   columns: number,
   userId: string,
   paint: Paint = (text) => text,
+  // Set while the orchestrator is handling this queued message: it shows as Processing on this animation frame.
   frame?: number,
 ) {
   const isMember = message.role === 'member';
-  const [icon, status, tone] = isMember ? statuses[message.status] : (['›', '', 'accent'] as const);
+  const active = isMember && message.status === 'queued' && frame !== undefined;
+  const [icon, status, tone] = active
+    ? (['◌', 'Processing', 'muted'] as const)
+    : isMember
+      ? statuses[message.status]
+      : (['›', '', 'accent'] as const);
   const author = isMember && message.authorId === userId ? 'You' : name(message.author);
   const stamp = time.format(new Date(message.createdAt));
   const label = clip(author, Math.max(1, columns - status.length - 13));
   const header =
     `${paint(icon, tone)} ${paint(label, isMember ? 'bold' : 'accent')}  ${paint(stamp, 'muted')}` +
     (status && width(label) + status.length + 11 <= columns
-      ? `  ${frame !== undefined && message.status === 'queued' ? shimmer(status, frame, paint) : paint(status, tone)}`
+      ? `  ${active ? shimmer(status, frame ?? 0, paint) : paint(status, tone)}`
       : '');
   const body = isMember
     ? wrap(message.text, Math.max(2, columns - 2))
@@ -222,7 +229,9 @@ export function chatFrame(view: View): Frame {
   lines.push(heading(queued, left) + (right ? sep + heading(runLabel, right) : ''));
 
   const transcript = view.messages.length
-    ? view.messages.flatMap((message) => messageLines(message, left, view.userId, paint, view.shimmer))
+    ? view.messages.flatMap((message) =>
+        messageLines(message, left, view.userId, paint, view.processing?.has(message.id) ? view.frame : undefined),
+      )
     : wrap('Send a task, question, or context to the orchestrator.', left).map((line) => paint(line, 'muted'));
   const runs = state?.runs ?? [];
   const activity = right

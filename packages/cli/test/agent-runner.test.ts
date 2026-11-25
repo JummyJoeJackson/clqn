@@ -142,7 +142,18 @@ test('the leader’s chat connects an orchestrator and runs it only while messag
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(f.spawned.length, 0);
 
-  const queued = chatState({ queued: 1 });
+  const message = {
+    id: randomUUID(),
+    sequence: 1,
+    authorId: randomUUID(),
+    author: 'ana@example.com',
+    role: 'member',
+    createdAt: new Date().toISOString(),
+    text: 'Fix the links',
+    status: 'queued',
+    replyTo: null,
+  } as const;
+  const queued = chatState({ queued: 1, messages: [message] });
   runner.update(queued);
   await until(() => f.spawned.length === 1);
   const [run] = f.spawned;
@@ -153,13 +164,13 @@ test('the leader’s chat connects an orchestrator and runs it only while messag
   assert.match(run!.env.CLQN_AGENT_PROFILE!, /agents/);
   await until(() => run!.child.input.includes('clqn_chat_inbox'));
   assert.equal(runner.status(), 'Orchestrator working');
-  assert.equal(runner.working(), true);
+  assert.deepEqual([...runner.processing()], [message.id]);
   runner.update(queued);
   assert.equal(f.spawned.length, 1);
 
   run!.child.finish(0, '{"result":"done"}');
   await until(() => runner.status() === undefined);
-  assert.equal(runner.working(), false);
+  assert.equal(runner.processing().size, 0);
   // The queue did not move, so wait before trying again.
   runner.update(queued);
   assert.equal(f.spawned.length, 1);

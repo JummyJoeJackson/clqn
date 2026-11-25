@@ -15,15 +15,16 @@ const message: ChatMessage = {
   replyTo: null,
 };
 
-test('a queued status shimmers while the orchestrator works', () => {
+test('a queued message the orchestrator is handling shows a shimmering Processing', () => {
   const paint = painter(true);
   const still = messageLines(message, 60, 'me', paint)[0]!;
   assert.match(still, /\x1b\[90mQueued\x1b\[0m/);
+  assert.match(messageLines(message, 60, 'me', paint, 0)[0]!.replace(/\x1b\[\d+m/g, ''), /Processing$/);
   const bright = (frame: number) =>
     [...messageLines(message, 60, 'me', paint, frame)[0]!.matchAll(/\x1b\[97m(.)/g)].map((match) => match[1]);
-  assert.deepEqual(bright(3), ['Q']);
-  assert.deepEqual(bright(5), ['e']);
+  assert.deepEqual(bright(3), ['P']);
+  assert.deepEqual(bright(5), ['o']);
   assert.notDeepEqual(bright(5), bright(6));
-  // Handled messages never shimmer.
+  // Handled messages never shimmer or show Processing.
   assert.doesNotMatch(messageLines({ ...message, status: 'handled' }, 60, 'me', paint, 3)[0]!, /\x1b\[97m/);
 });

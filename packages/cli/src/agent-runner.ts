@@ -69,8 +69,8 @@ export interface AgentChoices {
 export interface AgentRunner {
   update(state: ChatState): void;
   status(): string | undefined;
-  // True while the orchestrator is handling the chat queue.
-  working(): boolean;
+  // Queued messages the running orchestrator is handling; empty between runs.
+  processing(): ReadonlySet<string>;
   // The agent CLIs on this machine and which are turned off. Changing them reconnects this member's workers.
   choices(): Promise<AgentChoices>;
   choose(off: Runtime[]): Promise<void>;
@@ -268,6 +268,7 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
   let preparedAt = -Infinity;
   let problem: string | undefined;
   let orchestrating = false;
+  let processing: ReadonlySet<string> = new Set();
   let lastRun = { at: -Infinity, failed: false, queue: '' };
   let stopped = false;
   const killAll = () => {
@@ -328,6 +329,8 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
     const wait = lastRun.failed || lastRun.queue === queue ? retryAfter : 0;
     if (orchestrating || !state.queued || now() - lastRun.at < wait) return;
     orchestrating = true;
+    // The run reads the inbox as it starts, so it handles what is queued now; later messages wait for the next run.
+    processing = new Set(state.messages.filter(({ status }) => status === 'queued').map(({ id }) => id));
     track(
       (async () => {
         let failed = true;
@@ -347,6 +350,7 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
           problem = `Orchestrator · ${message(error)}`;
         } finally {
           orchestrating = false;
+          processing = new Set();
           lastRun = { at: now(), failed, queue };
         }
       })(),
@@ -525,7 +529,7 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
   return {
     update,
-    working: () => orchestrating,
+    processing: () => processing,
     status() {
       const count = workers.size;
       return (
