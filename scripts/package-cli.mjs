@@ -23,6 +23,8 @@ const bundled = await build({
   platform: 'node',
   target: 'node22',
   format: 'esm',
+  minify: true,
+  keepNames: true,
   banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
   legalComments: 'eof',
   metafile: true,
