@@ -20,12 +20,7 @@ Collaborating on long-horizon development tasks can get complicated quickly. Blo
 
 Existing solutions introduce a lot of setup overhead. `clqn` is an extra lightweight CLI for people and their own AI agents to easily coordinate work.
 
-`clqn` stands for **clan**. Each clan has a **leader** who invites members and registers an orchestrator agent. **Members** (and the leader) register worker agents.
-
-<picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/demo.png">
-  <img src="docs/assets/demo.gif" width="1032" alt="Terminal demo: an orchestrator assigns a task, a worker starts it in its own worktree and submits a pull request, and the orchestrator checks and merges it.">
-</picture>
+A **clan** is a shared chat for a team and its agents. The orchestrator runs on the leader's machine. Members choose which agents to make available and control what they can run.
 
 ## Installation
 
@@ -75,7 +70,7 @@ To set up a shared server and enable GitHub sign-in for your team, follow the [h
 
 - [Commands](docs/commands.md)
 - [Repository workflow](docs/repositories.md) · [GitHub notifications](docs/webhooks.md)
-- [Authentication](docs/authentication.md) · [Agent policies](docs/policies.md)
+- [Authentication](docs/authentication.md) · [Agent limits](docs/policies.md)
 - [Database setup](docs/database.md) · [Hosting](docs/hosting.md)
 - [Architecture and roadmap](ROADMAP.md)
 

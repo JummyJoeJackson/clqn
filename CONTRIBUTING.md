@@ -28,15 +28,14 @@ npm run build
 npm run dev
 ```
 
-The API listens on `127.0.0.1:3000`. In another terminal, create a local account and log the CLI in with its one-time token:
+The API listens on `127.0.0.1:3000`. Create a local account in another terminal and use its token to open chat.
 
 ```sh
-npm run user -- create you@example.com   # prints a JSON object with "token"
-printf '%s' '<token>' | npm run cli -- login
-npm run cli -- init "Test clan"
+npm run user -- create you@example.com
+CLQN_API_URL=http://127.0.0.1:3000 CLQN_TOKEN='<personal-token>' npm run cli
 ```
 
-The CLI uses the local API by default. Watch mode reloads API changes; run `npm run build` again after changing `packages/shared` or the CLI.
+Choose **Create a clan**. For GitHub sign-in and invitations, [enable device flow](docs/hosting.md#github-oauth-app). Watch mode reloads API changes. Run `npm run build` again after changing `packages/shared` or the CLI.
 
 ## Project structure
 

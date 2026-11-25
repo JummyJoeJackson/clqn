@@ -21,7 +21,7 @@ Commit schema changes with their migrations from `packages/api/drizzle`. Add new
 
 ## Data guarantees
 
-PostgreSQL stores identities, clan memberships, invitations, agents, policies, context revisions, tasks, repository links, and audit events.
+PostgreSQL stores identities, clan memberships, invitations, agents, chat messages and member settings, context revisions, tasks, repository links, and audit events.
 
 - Credentials and invitation codes are hashed; webhook signing keys stay outside the database. GitHub login attempts temporarily store device codes, never GitHub access tokens.
 - Unique constraints scope memberships, context revisions, task branches, and webhook deliveries. Each clan allows one orchestrator.
