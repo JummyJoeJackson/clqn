@@ -8,19 +8,22 @@ import {
   ClqnClient,
   createClanSchema,
   defaultChatSettings,
+  type LinkedRepository,
   limitSchema,
 } from '@clqn/shared';
 import { type Config, readConfig, removeConfig, writeConfig, writeServer } from './config.js';
+import { localRepository } from './git.js';
+import { configureGithubWebhook } from './github-hooks.js';
 import { githubLogin } from './login.js';
 import { terminalText } from './terminal.js';
 
 export type Ask = (question: string) => Promise<string>;
 export type Print = (text: string) => void;
 
-// Keep the selected clan across sign-ins and remember the server for later runs.
+// Keep local preferences across sign-ins and remember the server for later runs.
 async function saveToken(server: string, token: string) {
-  const { clanId } = await readConfig(server).catch((): Config => ({}));
-  await writeConfig(server, clanId ? { token, clanId } : { token });
+  const config = await readConfig(server).catch((): Config => ({}));
+  await writeConfig(server, { ...config, token });
   await writeServer(server);
 }
 
@@ -55,15 +58,80 @@ export async function signOut(server: string) {
 
 // The saved clan, unless the user has left it, was removed, or it was deleted; then forget it so setup asks again.
 export async function savedClan(server: string, api: ClqnClient): Promise<string | undefined> {
-  const config = await readConfig(server);
-  if (!config.clanId) return undefined;
-  if ((await api.listClans()).clans.some((clan) => clan.id === config.clanId)) return config.clanId;
-  await writeConfig(server, config.token ? { token: config.token } : {});
+  const { clanId, ...config } = await readConfig(server);
+  if (!clanId) return undefined;
+  if ((await api.listClans()).clans.some((clan) => clan.id === clanId)) return clanId;
+  await writeConfig(server, config);
   return undefined;
 }
 
 export async function selectClan(server: string, clanId: string) {
   await writeConfig(server, { ...(await readConfig(server)), clanId });
+}
+
+export async function linkGithubRepository(api: ClqnClient, server: string, clanId: string, slug: string) {
+  const { repository, webhook } = await api.linkRepository(clanId, slug);
+  try {
+    const configured = await configureGithubWebhook({
+      repository: slug,
+      url: new URL(webhook.path, server).href,
+      secret: webhook.secret,
+    });
+    // Only safe metadata is returned to the CLI output and repository setup.
+    return { repository, webhook: configured };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'GitHub operation failed';
+    throw new Error(`The clan link was saved. Fix GitHub webhook setup and retry clqn repo link. ${detail}`);
+  }
+}
+
+interface ChatRepositorySetup {
+  sync?: { repoPath: string; repository: string; initialCursor: number };
+  notice?: string;
+}
+
+export async function setupChatRepository(input: {
+  api: ClqnClient;
+  server: string;
+  clanId: string;
+  project: string;
+  ask: Ask;
+  print: Print;
+}): Promise<ChatRepositorySetup> {
+  const { api, server, clanId, project, ask, print } = input;
+  const local = await localRepository(project).catch(() => undefined);
+  if (!local) return { notice: 'Main sync off · open clqn from a GitHub clone' };
+  const readLink = async () =>
+    (await api.repositories(clanId)).repositories.find(({ slug }) => slug === local.repository);
+  const start = (link: LinkedRepository): ChatRepositorySetup => ({
+    sync: { repoPath: local.root, repository: link.slug, initialCursor: link.lastEventSequence },
+  });
+  // Chat info also establishes that setup is running under a personal credential.
+  const [{ canStart }, linked] = await Promise.all([api.chatInfo(clanId), readLink().catch(() => null)]);
+  if (linked) return start(linked);
+  if (linked === null) return { notice: 'Could not read linked repositories · reopen clqn to retry' };
+  if (!canStart) return { notice: `Main sync off · ask your clan leader to link ${local.repository}` };
+  const skipped = { notice: 'Main sync off · run clqn repo link to enable' };
+  const key = `${clanId}:${local.repository}`;
+  if ((await readConfig(server)).skippedRepositoryLinks?.includes(key)) return skipped;
+  for (;;) {
+    const answer = (await ask(`Link ${local.repository} to this clan for pull requests and main sync? [y/N] `))
+      .trim()
+      .toLowerCase();
+    if (answer === 'y' || answer === 'yes') break;
+    if (answer !== '' && answer !== 'n' && answer !== 'no') continue;
+    const config = await readConfig(server);
+    await writeConfig(server, { ...config, skippedRepositoryLinks: [...(config.skippedRepositoryLinks ?? []), key] });
+    return skipped;
+  }
+  try {
+    const { repository } = await linkGithubRepository(api, server, clanId, local.repository);
+    return start(repository);
+  } catch (error) {
+    print(terminalText(error instanceof Error ? error.message : 'Could not link the repository', false));
+    const saved = await readLink().catch(() => undefined);
+    return saved ? { ...start(saved), notice: 'Webhook setup failed · retry clqn repo link' } : skipped;
+  }
 }
 
 async function pick(ask: Ask, count: number, question: string) {

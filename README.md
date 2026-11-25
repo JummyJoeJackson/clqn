@@ -44,43 +44,29 @@ brew install clqn
 
 ## Quick start
 
-Install and sign in to Codex CLI or Claude Code. From your project folder, create a clan, invite your teammate, and open your agent:
+Install and sign in to Codex CLI or Claude Code and the GitHub CLI (`gh`). Run `clqn` from your GitHub clone. Sign in with GitHub, choose **Create a clan**, and accept the repository link prompt. Linking the webhook requires repository admin access.
+
+Use the invite command from another terminal.
 
 ```sh
-clqn init --invite teammate@example.com --run
+clqn invite teammate@example.com
 ```
 
-Your teammate runs this from their project folder to join and open their agent:
-
-```sh
-clqn join --run
-```
-
-The first command on each machine prompts for GitHub sign-in. Follow the link and enter GitHub's short code. Use the GitHub account with the invited email. With several pending invitations, name the clan, for example `clqn join "My project" --run`.
-
-`clqn init` uses the folder name for the clan. Leave off `--run` to create or join first, then use `clqn agent run` whenever you want a connected session. If both runtimes are installed, use `--run claude` to choose Claude Code. [Agent setup](docs/index.md#connect-an-agent)
-
-`clqn clans` shows your clans, and `clqn use "My project"` switches between them. Hosted clqn keeps your members, tasks, and shared context available to your team. For self-hosted teams, sign in once with `clqn login --server <https-address>`. [Hosting guide](docs/hosting.md)
+Your teammate runs `clqn` from their clone, signs in with the GitHub account that received the invitation, and chooses **Join a clan**. Use `clqn clans` to list clans and `clqn use "My project"` to switch.
 
 ## Chat with your clan
 
 Run `clqn` to open the shared terminal chat. The clan leader starts the session and joins through the same screen. From the composer, members can give the orchestrator tasks or context, ask questions, and answer spawn approvals from the keyboard. [Chat setup and keybindings](docs/chat.md)
 
-## Set up repositories and agents
-
-As the leader, run `clqn repo link` once to set up the [GitHub webhook](docs/webhooks.md#link-a-repository). While MCP is connected, changes to the default branch on origin automatically update clean local checkouts of it. The leader can register the orchestrator with `clqn agent add coordinator --orchestrator`.
-
-Tasks, branches, and worktrees are handled by the orchestrator from the chat. Use `clqn --help` to see the setup commands. Add `--json` for scripting.
+When a worker finishes code changes, clqn pushes the task branch and posts a pull request link to chat. Press **Ctrl+L** to find the PR. The clan leader reviews it and presses **Y** to approve that commit for merge. While the leader has chat open, clqn merges it after the GitHub checks pass. Members with chat open get the update in clean local default-branch checkouts. [Repository workflow](docs/repositories.md)
 
 ## Run your own server
 
-Clone this repository and open a terminal in the clone. Docker Compose starts the clqn server and its database on your machine. The second command creates and signs in to a local account in one step.
+Clone this repository and configure GitHub sign-in for the API. Docker Compose starts the server and its database on your machine.
 
 ```sh
 docker compose --profile server up --build -d --wait
-docker compose exec -T api node packages/api/dist/manage-user.js create you@example.com \
-  | clqn login --server http://127.0.0.1:8080
-clqn init "My project"
+clqn --api-url http://127.0.0.1:8080
 ```
 
 To set up a shared server and enable GitHub sign-in for your team, follow the [hosting guide](docs/hosting.md).

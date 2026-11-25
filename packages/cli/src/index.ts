@@ -22,9 +22,19 @@ import {
 import { runChat } from './chat.js';
 import { hostedServer, preferredServer, readConfig, writeConfig } from './config.js';
 import { localRepository } from './git.js';
-import { configureGithubWebhook, removeGithubWebhook } from './github-hooks.js';
+import { removeGithubWebhook } from './github-hooks.js';
 import { runMcpSync } from './mcp-sync.js';
-import { chooseClan, savedClan, selectClan, signIn, signOut, terminalPrompt } from './setup.js';
+import {
+  chooseClan,
+  linkGithubRepository,
+  savedClan,
+  selectClan,
+  setupChatRepository,
+  signIn,
+  signOut,
+  terminalPrompt,
+} from './setup.js';
+import { runSyncWatch } from './sync-watch.js';
 import { terminalText } from './terminal.js';
 
 let serverUrl = hostedServer;
@@ -86,22 +96,9 @@ repo
   .option('--clan <id>', 'clan ID')
   .action(async (name: string | undefined, options: { repo?: string; path: string; clan?: string }) => {
     const slug = await repoSelection(name, options);
-    const api = await client();
     const clanId = await selectedClan(options);
-    const setup = await api.linkRepository(clanId, slug);
-    const url = new URL(setup.webhook.path, apiUrl()).href;
-    try {
-      const webhook = await configureGithubWebhook({ repository: slug, url, secret: setup.webhook.secret });
-      // Never print or persist the per-link webhook secret, even in JSON mode.
-      output(
-        { repository: setup.repository, webhook },
-        `Linked ${slug} to clan ${clanId}.\nMain sync runs automatically while the project MCP connection is active.`,
-      );
-    } catch (error) {
-      throw new Error(
-        `The clan link was saved, but GitHub setup failed. Fix gh authentication or repository admin access and retry repo link. ${error instanceof Error ? error.message : 'GitHub operation failed'}`,
-      );
-    }
+    const setup = await linkGithubRepository(await client(), apiUrl(), clanId, slug);
+    output(setup, `Linked ${slug} to clan ${clanId}.\nMain sync runs while clqn is open in the project clone.`);
   });
 repo
   .command('list')
@@ -363,7 +360,8 @@ program
   .description('Start the local stdio MCP server and automatic main sync')
   .option('--path <directory>', 'project clone or worktree (defaults to current directory)', '.')
   .addOption(new Option('--profile <path>').hideHelp())
-  .action(async (options: { path: string }) => {
+  .addOption(new Option('--no-sync').hideHelp())
+  .action(async (options: { path: string; sync: boolean }) => {
     const api = await client();
     const config = sessionProfile ? {} : await readConfig(apiUrl());
     const actor = sessionProfile || process.env.CLQN_TOKEN || config.token ? await api.whoami() : undefined;
@@ -385,7 +383,7 @@ program
       process.removeListener('SIGINT', shutdown);
       process.removeListener('SIGTERM', shutdown);
     };
-    if (!clanId) return;
+    if (!clanId || !options.sync) return;
     let previous = '';
     await runMcpSync(api, clanId, {
       repoPath: options.path,
@@ -421,30 +419,65 @@ async function openChat() {
     }
   }
   let clanId = process.env.CLQN_CLAN_ID ?? (await savedClan(apiUrl(), await client()));
-  if (!clanId) {
-    const prompt = terminalPrompt();
-    try {
+  let prompt: ReturnType<typeof terminalPrompt> | undefined;
+  const ask = (question: string) => {
+    prompt ??= terminalPrompt();
+    return prompt.ask(question);
+  };
+  const print = (text: string) => console.log(text);
+  const project = process.cwd();
+  let api: ClqnClient;
+  let repository: Awaited<ReturnType<typeof setupChatRepository>>;
+  try {
+    if (!clanId) {
       const clan = await chooseClan({
         server: apiUrl(),
         connect: client,
-        ask: prompt.ask,
-        print: (text) => console.log(text),
+        ask,
+        print,
         canSignIn: !environmentToken,
       });
       clanId = clan.id;
-    } finally {
-      prompt.close();
+      await selectClan(apiUrl(), clanId);
     }
-    await selectClan(apiUrl(), clanId);
+    api = await client();
+    repository = await setupChatRepository({ api, server: apiUrl(), clanId, project, ask, print });
+  } finally {
+    prompt?.close();
   }
-  const api = await client();
+  const syncController = new AbortController();
+  let repositoryStatus = repository.sync ? 'Checking main…' : undefined;
+  const sync =
+    repository.sync &&
+    runSyncWatch({
+      ...repository.sync,
+      signal: syncController.signal,
+      getEvents: (cursor, signal) => api.events(clanId, cursor, 100, signal),
+      onResult: ({ status, reason, branch, headSha }) => {
+        const skipped = {
+          not_main: 'default branch is not checked out',
+          dirty: 'local changes',
+          operation_in_progress: 'Git operation in progress',
+          local_commits: 'local commits',
+          diverged: 'local history has diverged',
+          no_local_main: 'no local default branch',
+        };
+        if (status === 'skipped' && reason) repositoryStatus = `${branch} sync paused · ${skipped[reason]}`;
+        else if (status === 'updated' && headSha) repositoryStatus = `${branch} synced to ${headSha.slice(0, 7)}`;
+        else repositoryStatus = `${branch} up to date`;
+      },
+      onError: () => {
+        repositoryStatus = 'Main sync unavailable · retrying';
+      },
+    });
   // The orchestrator (for the leader) and approved workers run in the background only while the chat is open.
-  const agents = startAgentRunner({ api, server: apiUrl(), clanId, project: process.cwd() });
+  const agents = startAgentRunner({ api, server: apiUrl(), clanId, project });
   let result: Awaited<ReturnType<typeof runChat>>;
   try {
-    result = await runChat(api, clanId, agents);
+    result = await runChat(api, clanId, agents, { repositoryStatus: () => repository.notice ?? repositoryStatus });
   } finally {
-    await agents.stop();
+    syncController.abort();
+    await Promise.all([agents.stop(), sync]);
   }
   if (result === 'sign-out') console.log(await signOut(apiUrl()));
 }

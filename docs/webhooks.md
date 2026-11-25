@@ -1,10 +1,10 @@
 # GitHub main notifications
 
-Signed GitHub push webhooks record `repository.main_changed` events for the repository's default branch. Signed pull request webhooks [confirm task merges](repositories.md#events-and-the-trust-boundary). Connected MCP clients use these events for [safe local sync](repositories.md#automatically-sync-only-main), with startup and five-minute fallback fetches.
+Signed GitHub push webhooks record `repository.main_changed` events for the repository's default branch. Signed pull request webhooks [confirm task merges](repositories.md#events-and-the-trust-boundary). Open chat and connected MCP clients use these events for [safe local sync](repositories.md#automatically-sync-only-main), with startup and five-minute fallback fetches.
 
 ## Link a repository
 
-Your operator must enable webhook support on the API. Use the leader's personal clqn token and local `gh` authentication with repository admin access:
+Your operator must enable webhook support on the API. The clan leader can link the current clone during chat setup with local `gh` authentication and repository admin access. These commands manage the same link.
 
 ```sh
 clqn repo link                 # infer current origin
@@ -22,7 +22,7 @@ The API verifies signatures before parsing JSON, limits bodies to 2 MiB, and req
 
 Delivery registration, event insertion, and the link watermark commit together. Failed transactions remain retryable. Unlinking prevents later delivery acceptance. Audit events identify the integration owner, not the GitHub pusher.
 
-Clients fetch current remote main rather than checking out payload SHAs. Forced pushes and deletions trigger normal sync checks: divergent history is skipped and a deleted main fails to fetch. Webhooks never integrate PRs or complete tasks.
+Clients fetch current remote main and verify that it is safe to fast-forward locally. Divergent history is skipped and a deleted main fails to fetch. A signed pull request webhook records a matching merge and completes a chat task.
 
 ## Unlink a repository
 

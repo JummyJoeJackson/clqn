@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, delimiter, join } from 'node:path';
 import test, { type TestContext } from 'node:test';
-import { ClqnClient } from '@clqn/shared';
+import { ClqnClient, defaultChatSettings } from '@clqn/shared';
 import { readConfig, readServer, writeConfig } from '../src/config.js';
-import { chooseClan, savedClan, signIn, signOut } from '../src/setup.js';
+import { chooseClan, savedClan, setupChatRepository, signIn, signOut } from '../src/setup.js';
 
 type Handler = (request: IncomingMessage, body: unknown, response: ServerResponse) => void;
 
@@ -152,6 +153,113 @@ test('a saved clan the user no longer belongs to is forgotten so setup asks agai
   await writeConfig(f.url, { token, clanId: randomUUID() });
   assert.equal(await savedClan(f.url, api), undefined);
   assert.deepEqual(await readConfig(f.url), { token });
+});
+
+function gitClone(directory: string) {
+  const project = join(directory, 'project');
+  execFileSync('git', ['init', '--quiet', project]);
+  execFileSync('git', ['-C', project, 'remote', 'add', 'origin', 'https://github.com/owner/project.git']);
+  return project;
+}
+
+test('chat setup links the verified origin only after the leader agrees', async (t) => {
+  const clanId = randomUUID();
+  const repository = {
+    id: randomUUID(),
+    clanId,
+    slug: 'owner/project',
+    createdAt: new Date().toISOString(),
+    lastEventSequence: 17,
+  };
+  const secret = 'a'.repeat(64);
+  let canStart = false;
+  let linkRequests = 0;
+  const f = await fixture(t, (request, body, response) => {
+    if (request.url === `/v1/clans/${clanId}/chat`) {
+      response.end(JSON.stringify({ session: null, clan: 'Project', canStart, settings: defaultChatSettings }));
+    } else if (request.url === `/v1/clans/${clanId}/repositories` && request.method === 'GET') {
+      response.end(JSON.stringify({ repositories: linkRequests ? [repository] : [] }));
+    } else if (request.url === `/v1/clans/${clanId}/repositories` && request.method === 'POST') {
+      assert.deepEqual(body, { slug: repository.slug });
+      linkRequests += 1;
+      response.end(JSON.stringify({ repository, webhook: { path: `/hooks/github/${repository.id}`, secret } }));
+    } else response.writeHead(404).end();
+  });
+  const project = gitClone(f.directory);
+  const api = new ClqnClient(f.url);
+  const options = { api, clanId, project, server: f.url };
+  assert.match((await setupChatRepository({ ...options, ...scripted([]) })).notice!, /ask your clan leader/);
+  assert.equal(linkRequests, 0);
+
+  const bin = join(f.directory, 'bin');
+  const installLog = join(f.directory, 'hook.json');
+  await mkdir(bin);
+  await writeFile(
+    join(bin, 'gh'),
+    `#!${process.execPath}
+const fs = require('node:fs');
+if (process.argv.includes('POST')) {
+  fs.writeFileSync(${JSON.stringify(installLog)}, fs.readFileSync(0, 'utf8'));
+  process.stdout.write('{"id":5}');
+} else process.stdout.write('[[]]');
+`,
+    { mode: 0o755 },
+  );
+  const previousPath = process.env.PATH;
+  t.after(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  });
+  process.env.PATH = [bin, previousPath].filter(Boolean).join(delimiter);
+  canStart = true;
+  const prompts = scripted(['y']);
+  const linked = await setupChatRepository({ ...options, ...prompts });
+  assert.deepEqual(linked, {
+    sync: { repoPath: await realpath(project), repository: repository.slug, initialCursor: 17 },
+  });
+  assert.equal(linkRequests, 1);
+  assert.match(prompts.questions[0]!, /Link owner\/project/);
+  assert.ok(!JSON.stringify([linked, prompts.printed]).includes(secret));
+  const webhook = JSON.parse(await readFile(installLog, 'utf8'));
+  assert.deepEqual(webhook.events, ['push', 'pull_request']);
+  assert.equal(webhook.config.secret, secret);
+  assert.equal(webhook.config.url, `${f.url}/hooks/github/${repository.id}`);
+  assert.deepEqual(await setupChatRepository({ ...options, ...scripted([]) }), linked);
+  assert.equal(linkRequests, 1);
+});
+
+test('a skipped repository prompt stays skipped unless the clone gets linked', async (t) => {
+  const clanId = randomUUID();
+  const linked = {
+    id: randomUUID(),
+    clanId,
+    slug: 'owner/project',
+    createdAt: new Date().toISOString(),
+    lastEventSequence: 29,
+  };
+  const other = { ...linked, id: randomUUID(), slug: 'owner/other' };
+  const repositoriesPath = `/v1/clans/${clanId}/repositories`;
+  let hasLink = false;
+  const f = await fixture(t, (request, _body, response) => {
+    assert.equal(request.method, 'GET');
+    if (request.url === `/v1/clans/${clanId}/chat`) {
+      response.end(JSON.stringify({ session: null, clan: 'Project', canStart: true, settings: defaultChatSettings }));
+    } else if (request.url === repositoriesPath) {
+      response.end(JSON.stringify({ repositories: [other], ...(hasLink ? { nextCursor: other.id } : {}) }));
+    } else if (request.url === `${repositoriesPath}?after=${other.id}`) {
+      response.end(JSON.stringify({ repositories: [linked] }));
+    } else response.writeHead(404).end();
+  });
+  const project = gitClone(f.directory);
+  const options = { api: new ClqnClient(f.url), clanId, project, server: f.url };
+  const skipped = await setupChatRepository({ ...options, ...scripted(['n']) });
+  assert.match(skipped.notice!, /run clqn repo link/);
+  assert.equal(skipped.sync, undefined);
+  assert.deepEqual(await setupChatRepository({ ...options, ...scripted([]) }), skipped);
+  hasLink = true;
+  assert.deepEqual(await setupChatRepository({ ...options, ...scripted([]) }), {
+    sync: { repoPath: await realpath(project), repository: linked.slug, initialCursor: 29 },
+  });
 });
 
 test('joining a clan accepts the chosen invitation and refreshes a stale GitHub sign-in', async (t) => {

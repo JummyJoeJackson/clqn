@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 export interface Config {
   token?: string;
   clanId?: string;
+  skippedRepositoryLinks?: string[];
 }
 
 export const hostedServer = 'https://clqn-api-660379279615.us-central1.run.app';
@@ -45,12 +46,16 @@ export async function readConfig(apiUrl: string): Promise<Config> {
     const value = config as Record<string, unknown>;
     if (
       (value.token !== undefined && typeof value.token !== 'string') ||
-      (value.clanId !== undefined && typeof value.clanId !== 'string')
+      (value.clanId !== undefined && typeof value.clanId !== 'string') ||
+      (value.skippedRepositoryLinks !== undefined &&
+        (!Array.isArray(value.skippedRepositoryLinks) ||
+          !value.skippedRepositoryLinks.every((entry) => typeof entry === 'string')))
     )
       throw new Error();
     return {
       ...(typeof value.token === 'string' ? { token: value.token } : {}),
       ...(typeof value.clanId === 'string' ? { clanId: value.clanId } : {}),
+      ...(Array.isArray(value.skippedRepositoryLinks) ? { skippedRepositoryLinks: value.skippedRepositoryLinks } : {}),
     };
   } catch {
     throw new Error('Invalid clqn configuration. Remove it from the clqn config directory and run clqn again.');
