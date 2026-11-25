@@ -111,8 +111,10 @@ export function agentCommand(
     commands?: WorkerCommands | undefined;
     // Claude Code only: keep running and read one JSON user message per line from stdin, each a turn.
     session?: boolean | undefined;
-    // Claude Code only: rules added to the system prompt, so they hold for every turn of a session.
+    // Rules added to the system (Claude Code) or developer (Codex) instructions, so they hold for every turn.
     instructions?: string | undefined;
+    // Codex only: continue this earlier session, so the agent remembers it.
+    resume?: string | undefined;
   },
 ): AgentCommand {
   const commands = options.role === 'worker' ? (options.commands ?? 'sandboxed') : 'off';
@@ -125,19 +127,25 @@ export function agentCommand(
     runtime === 'codex'
       ? [
           'exec',
+          ...(options.resume ? ['resume'] : []),
           '--json',
           '--skip-git-repo-check',
           // Skip the member's own Codex config: it adds context to every turn. Sign-in still works.
           '--ignore-user-config',
           ...(commands === 'unrestricted'
             ? ['--dangerously-bypass-approvals-and-sandbox']
-            : ['--sandbox', commands === 'sandboxed' ? 'workspace-write' : 'read-only']),
+            : options.resume
+              ? // Resuming has no --sandbox flag.
+                ['-c', `sandbox_mode="${commands === 'sandboxed' ? 'workspace-write' : 'read-only'}"`]
+              : ['--sandbox', commands === 'sandboxed' ? 'workspace-write' : 'read-only']),
           ...model,
+          ...(options.instructions ? ['-c', `developer_instructions=${JSON.stringify(options.instructions)}`] : []),
           '-c',
           // Codex exec cannot ask for approval, so clqn tools that write would otherwise always be refused.
           `mcp_servers.clqn={command=${JSON.stringify(command)},args=${JSON.stringify(args)},default_tools_approval_mode="approve"}`,
           '-c',
           `shell_environment_policy.set.CLQN_AGENT_PROFILE=${JSON.stringify(profilePath)}`,
+          ...(options.resume ? [options.resume] : []),
           '-',
         ]
       : [
@@ -180,11 +188,15 @@ const object = (value: unknown): Json => (value && typeof value === 'object' ? (
 const count = (...values: unknown[]) =>
   values.reduce<number>((sum, value) => sum + (typeof value === 'number' && value > 0 ? value : 0), 0);
 
-// Total input and output tokens and the final message from a finished run's stdout.
-export function agentOutput(runtime: Runtime, stdout: string): { tokens: number; text?: string; error?: string } {
+// Total input and output tokens, the final message, and Codex's session ID from a finished run's stdout.
+export function agentOutput(
+  runtime: Runtime,
+  stdout: string,
+): { tokens: number; text?: string; error?: string; session?: string } {
   let tokens = 0;
   let text: string | undefined;
   let error: string | undefined;
+  let session: string | undefined;
   for (const line of runtime === 'codex' ? stdout.split('\n') : [stdout]) {
     let event: Json;
     try {
@@ -200,6 +212,8 @@ export function agentOutput(runtime: Runtime, stdout: string): { tokens: number;
       tokens = count(usage.input_tokens, usage.cache_creation_input_tokens, usage.output_tokens);
       if (typeof event.result === 'string') text = event.result;
       if (event.is_error === true) error = text ?? 'Claude Code reported an error';
+    } else if (event.type === 'thread.started') {
+      if (typeof event.thread_id === 'string') session = event.thread_id;
     } else if (event.type === 'turn.completed') {
       // Codex input tokens include cached input.
       const usage = object(event.usage);
@@ -216,6 +230,7 @@ export function agentOutput(runtime: Runtime, stdout: string): { tokens: number;
     tokens: Math.min(tokens, Number.MAX_SAFE_INTEGER),
     ...(text?.trim() ? { text: text.trim() } : {}),
     ...(error ? { error: plainError(error) } : {}),
+    ...(session ? { session } : {}),
   };
 }
 

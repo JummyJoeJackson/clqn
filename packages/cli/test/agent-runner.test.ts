@@ -216,7 +216,7 @@ test('the leader’s chat connects an orchestrator and runs it only while messag
   assert.equal(f.spawned[1]!.child.killed, true);
 });
 
-test('a Codex orchestrator gets one run per message with the rules in its prompt', async (t) => {
+test('a Codex orchestrator resumes one session, a run per message, and starts fresh after a failure', async (t) => {
   const f = await fixture(t);
   const api = {
     whoami: async () => ({ id: userId, email: 'lead@example.com' }),
@@ -237,14 +237,42 @@ test('a Codex orchestrator gets one run per message with the rules in its prompt
     now: f.now,
   });
   t.after(() => runner.stop());
-  runner.update(chatState({ queued: 1 }));
-  await until(() => f.spawned.length === 1);
-  const [run] = f.spawned;
-  assert.equal(run!.command, 'codex');
-  await until(() => run!.child.input.includes('Handle the next queued message.'));
-  assert.match(run!.child.input, /^You are the clqn orchestrator/);
-  run!.child.finish(0);
-  await until(() => runner.status() === undefined);
+  const thread = randomUUID();
+  const queued = (n: number) => {
+    const message = {
+      id: randomUUID(),
+      sequence: n,
+      authorId: userId,
+      author: 'lead@example.com',
+      role: 'member' as const,
+    };
+    return chatState({ queued: 1, messages: [{ ...message, createdAt, text: 'Hi', status: 'queued', replyTo: null }] });
+  };
+  const runOnce = async (n: number, code: number, output = '') => {
+    runner.update(queued(n));
+    await until(() => f.spawned.length === n);
+    const run = f.spawned[n - 1]!;
+    await until(() => run.child.input === 'Handle the next queued message.');
+    run.child.finish(code, output);
+    await until(() => runner.status() === undefined || /failed/.test(runner.status() ?? ''));
+    return run.args;
+  };
+
+  const first = await runOnce(1, 0, `{"type":"thread.started","thread_id":"${thread}"}\n`);
+  assert.equal(f.spawned[0]!.command, 'codex');
+  assert.deepEqual(first.slice(0, 2), ['exec', '--json']);
+  assert.equal(first[first.indexOf('--sandbox') + 1], 'read-only');
+  assert.match(first.join(' '), /developer_instructions="You are the clqn orchestrator/);
+  // The next message continues the same session, still read-only.
+  const second = await runOnce(2, 0);
+  assert.deepEqual(second.slice(0, 2), ['exec', 'resume']);
+  assert.deepEqual(second.slice(-2), [thread, '-']);
+  assert.ok(second.includes('sandbox_mode="read-only"'));
+  assert.ok(!second.includes('--sandbox'));
+  // That run reported no session, so it failed to continue; the next starts fresh.
+  f.advance(60_000);
+  const third = await runOnce(3, 0);
+  assert.ok(!third.includes('resume'));
 });
 
 test('approved runs start this member’s worker with its model, report usage, and respect the agent limit', async (t) => {

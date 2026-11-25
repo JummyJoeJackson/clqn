@@ -282,6 +282,8 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
   let problem: string | undefined;
   let orchestrating = false;
   let session: Session | undefined;
+  // The Codex orchestrator's session, resumed by each run until it has had its turns.
+  let codex: { id: string; turns: number } | undefined;
   const listeners: (() => void)[] = [];
   let lastRun = { at: -Infinity, failed: false, queue: '' };
   let stopped = false;
@@ -306,9 +308,16 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
     prompt: string,
     model?: string | null,
     commands?: WorkerCommands,
+    orchestrator?: { instructions: string; resume?: string | undefined },
   ) {
     const log = await openLog(name, role, cwd);
-    const command = agentCommand(connection.runtime, connection.path, { project: cwd, role, model, commands });
+    const command = agentCommand(connection.runtime, connection.path, {
+      project: cwd,
+      role,
+      model,
+      commands,
+      ...orchestrator,
+    });
     let stdout = '';
     const result = await new Promise<{ code: number | null; error?: Error }>((done) => {
       // Output goes to a log, never to the terminal running the chat.
@@ -397,14 +406,23 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
   // One orchestrator turn that handles the next queued message.
   async function turn(connection: Connection): Promise<Turn> {
     if (connection.runtime !== 'claude') {
-      // Codex has no session to keep open, so each message gets its own run.
+      // Codex cannot stay open, so each message gets its own run that resumes the last one's session.
+      const resume = codex && codex.turns < sessionTurns ? codex : undefined;
       const { ok, output } = await launch(
         'orchestrator',
         connection,
         options.project,
         'orchestrator',
-        `${orchestratorRules}\n\n${nextMessage}`,
+        nextMessage,
+        null,
+        undefined,
+        {
+          instructions: orchestratorRules,
+          resume: resume?.id,
+        },
       );
+      // A failed run starts a fresh session next time.
+      codex = ok && output.session ? { id: output.session, turns: (resume?.turns ?? 0) + 1 } : undefined;
       return { ok, error: output.error };
     }
     session ??= await openSession(connection);
@@ -652,6 +670,7 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
       // The orchestrator may move to another agent CLI; its session closes after any turn in progress.
       if (session && !session.finish) session.child.stdin?.end();
       session = undefined;
+      codex = undefined;
       preparedAt = -Infinity;
       if (problem?.startsWith('Agents off')) problem = undefined;
       if (latest) update(latest);
