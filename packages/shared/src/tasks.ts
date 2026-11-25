@@ -41,12 +41,14 @@ export const repositoryInputSchema = z
   .strict()
   .refine((repository) => repository.branch !== repository.baseBranch, 'Task branch must differ from the base branch');
 export type RepositoryInput = z.input<typeof repositoryInputSchema>;
+export const mergeApprovalSchema = z.object({ headSha: gitShaSchema, approved: z.boolean() }).strict();
 export const taskRepositorySchema = repositoryInputSchema.safeExtend({
   headSha: gitShaSchema.nullable(),
   prNumber: z.number().int().positive().nullable(),
   prUrl: z.url().nullable(),
   mergeCommitSha: gitShaSchema.nullable(),
   state: z.enum(['pending', 'pushed', 'open', 'merged']),
+  mergeApproval: mergeApprovalSchema.optional(),
 });
 export type TaskRepository = z.infer<typeof taskRepositorySchema>;
 export const repositoryReportSchema = z

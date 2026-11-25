@@ -1,14 +1,15 @@
 import {
+  type ChatMergeRequest,
   type ChatMessage,
   type ChatRun,
   type ChatSettings,
   chatTokenHistoryHours,
   defaultChatSettings,
 } from '@clqn/shared';
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, lt, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { WorkspaceDb } from '../lib/access.js';
 import { chatMembers, chatMessages, chats, chatTokenHours } from './chat.js';
-import { agents, clans, users } from './schema.js';
+import { agents, clans, linkedRepositories, users } from './schema.js';
 import { tasks } from './tasks.js';
 
 export const messageScope = (clanId: string) => eq(chatMessages.clanId, clanId);
@@ -73,6 +74,7 @@ export async function chatQueue(db: WorkspaceDb, clanId: string, status: 'queued
 export const activeRun = and(
   eq(tasks.assignedAgentId, chatMessages.workerId),
   inArray(tasks.status, ['open', 'claimed']),
+  isNull(tasks.repository),
 );
 
 export async function chatUsage(db: WorkspaceDb, clanId: string, userId: string) {
@@ -81,7 +83,8 @@ export async function chatUsage(db: WorkspaceDb, clanId: string, userId: string)
       tokens: sql<string>`coalesce(sum(${chatMessages.tokens}), 0)`,
       reserved: sql<string>`coalesce(sum(case when ${activeRun} then
         greatest((${chatMessages.proposal}->>'estimatedTokens')::bigint - coalesce(${chatMessages.tokens}, 0), 0)
-        when ${tasks.status} = 'completed' and ${chatMessages.tokens} is null then
+        when (${tasks.status} = 'completed' or (${tasks.status} = 'claimed' and ${tasks.repository} is not null))
+          and ${chatMessages.tokens} is null then
           (${chatMessages.proposal}->>'estimatedTokens')::bigint
         else 0 end), 0)`,
       agents: count(sql`case when ${activeRun} then 1 end`),
@@ -127,6 +130,32 @@ export const runStatus = (row: { taskStatus: string; assigned: string | null; wo
         ? 'running'
         : 'queued';
 
+export async function chatMergeQueue(db: WorkspaceDb, clanId: string): Promise<ChatMergeRequest[]> {
+  const repository = tasks.repository;
+  const rows = await db
+    .select({ taskId: tasks.id, proposal: chatMessages.proposal, repository })
+    .from(chatMessages)
+    .innerJoin(tasks, eq(tasks.id, chatMessages.taskId))
+    .innerJoin(
+      linkedRepositories,
+      and(eq(linkedRepositories.clanId, tasks.clanId), eq(linkedRepositories.slug, sql`${repository}->>'slug'`)),
+    )
+    .where(
+      and(
+        messageScope(clanId),
+        eq(tasks.status, 'claimed'),
+        sql`${repository}->>'state' = 'open'`,
+        sql`(${repository}->'mergeApproval'->>'approved') is distinct from 'false'`,
+      ),
+    )
+    .orderBy(
+      sql`case when ${repository}->'mergeApproval'->>'approved' = 'true' then 0 else 1 end`,
+      asc(chatMessages.sequence),
+    )
+    .limit(60);
+  return rows.map(({ taskId, proposal, repository }) => ({ taskId, title: proposal!.title, repository: repository! }));
+}
+
 export async function chatActivity(db: WorkspaceDb, clanId: string, userId: string) {
   const [rows, approvals, [queue], [running], questions] = await Promise.all([
     db
@@ -139,12 +168,17 @@ export async function chatActivity(db: WorkspaceDb, clanId: string, userId: stri
         workerId: agents.id,
         taskId: tasks.id,
         taskStatus: tasks.status,
+        repository: tasks.repository,
       })
       .from(chatMessages)
       .innerJoin(agents, eq(agents.id, chatMessages.workerId))
       .innerJoin(tasks, eq(tasks.id, chatMessages.taskId))
       .where(and(messageScope(clanId), isNotNull(chatMessages.taskId)))
-      .orderBy(sql`case when ${activeRun} then 0 else 1 end`, desc(chatMessages.sequence))
+      .orderBy(
+        sql`case when ${activeRun} then 0 when ${tasks.ownerId} = ${userId} and ${tasks.status} = 'claimed'
+          and ${tasks.repository}->>'state' in ('pending', 'pushed') then 0 else 1 end`,
+        desc(chatMessages.sequence),
+      )
       .limit(40),
     db
       .select({ messageId: chatMessages.id, proposal: chatMessages.proposal, worker: agents.name })
@@ -185,6 +219,7 @@ export async function chatActivity(db: WorkspaceDb, clanId: string, userId: stri
     workerId: row.workerId,
     status: runStatus(row),
     tokens: row.tokens,
+    ...(row.repository ? { repository: row.repository } : {}),
   }));
   return {
     queued: queue!.total,

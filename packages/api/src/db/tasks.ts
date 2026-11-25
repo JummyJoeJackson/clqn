@@ -1,6 +1,7 @@
 import type { TaskRepository } from '@clqn/shared';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { check, index, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { appendEvent, type WorkspaceDb } from '../lib/access.js';
 import { agents, clans, users } from './schema.js';
 
 export const taskStatus = pgEnum('task_status', ['open', 'claimed', 'completed']);
@@ -34,3 +35,26 @@ export const tasks = pgTable(
     ),
   ],
 );
+
+// Chat work finishes as soon as GitHub integration is recorded, even when the worker is offline.
+export async function recordTaskIntegration(
+  db: Pick<WorkspaceDb, 'execute' | 'insert' | 'update'>,
+  row: typeof tasks.$inferSelect,
+  mergeCommitSha: string,
+  actorId: string,
+  agentId: string | null,
+  chatTask: boolean,
+) {
+  const [updated] = await db
+    .update(tasks)
+    .set({
+      repository: { ...row.repository!, state: 'merged', mergeCommitSha },
+      ...(chatTask ? { status: 'completed' as const } : {}),
+      updatedAt: sql`now()`,
+    })
+    .where(eq(tasks.id, row.id))
+    .returning();
+  for (const type of chatTask ? ['task.integrated', 'task.completed'] : ['task.integrated'])
+    await appendEvent(db, { clanId: row.clanId, actorId, agentId, type, resourceId: row.id });
+  return updated!;
+}

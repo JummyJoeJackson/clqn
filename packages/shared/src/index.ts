@@ -50,8 +50,10 @@ import {
   createTaskSchema,
   type IntegrationReport,
   integrationReportSchema,
+  mergeApprovalSchema,
   type RepositoryInput,
   type RepositoryReport,
+  repositoryInputSchema,
   repositoryReportSchema,
   type TaskListFilters,
   taskSchema,
@@ -453,8 +455,13 @@ export class ClqnClient {
       setAliasSchema.parse({ alias }),
     );
   }
-  task(clanId: string, taskId: string) {
-    return this.request(`/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}`, taskSchema);
+  task(clanId: string, taskId: string, signal?: AbortSignal) {
+    return this.request(
+      `/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}`,
+      taskSchema,
+      undefined,
+      signal,
+    );
   }
   assignTask(clanId: string, taskId: string, agentId: string) {
     return this.request(
@@ -470,6 +477,21 @@ export class ClqnClient {
       assignTaskSchema.parse({ agentId }),
     );
   }
+  bindChatTaskRepository(clanId: string, taskId: string, repository: RepositoryInput) {
+    return this.request(
+      `/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/chat-repository`,
+      taskSchema,
+      repositoryInputSchema.parse(repository),
+    );
+  }
+  decideChatMerge(clanId: string, taskId: string, headSha: string, approve: boolean, signal?: AbortSignal) {
+    return this.request(
+      `/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/merge-approval`,
+      taskSchema,
+      mergeApprovalSchema.parse({ headSha, approved: approve }),
+      signal,
+    );
+  }
   reportTaskRepository(clanId: string, taskId: string, report: RepositoryReport) {
     return this.request(
       `/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/repository`,
@@ -477,11 +499,12 @@ export class ClqnClient {
       repositoryReportSchema.parse(report),
     );
   }
-  integrateTask(clanId: string, taskId: string, report: IntegrationReport) {
+  integrateTask(clanId: string, taskId: string, report: IntegrationReport, signal?: AbortSignal) {
     return this.request(
       `/v1/clans/${encodeURIComponent(clanId)}/tasks/${encodeURIComponent(taskId)}/integration`,
       taskSchema,
       integrationReportSchema.parse(report),
+      signal,
     );
   }
   listTasks(clanId: string, filters: TaskListFilters = {}) {
