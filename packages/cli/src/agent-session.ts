@@ -114,7 +114,8 @@ export function agentCommand(
   const commands = options.role === 'worker' ? (options.commands ?? 'sandboxed') : 'off';
   const command = process.execPath;
   const npmCache = join(configDirectory(), 'npm-cache');
-  const args = [resolve(process.argv[1]!), 'mcp', '--profile', profilePath, '--path', options.project];
+  // The parent chat already watches the project, even while no agent is running.
+  const args = [resolve(process.argv[1]!), 'mcp', '--profile', profilePath, '--path', options.project, '--no-sync'];
   const model = options.model ? (runtime === 'codex' ? ['-m', options.model] : ['--model', options.model]) : [];
   const runtimeArgs =
     runtime === 'codex'

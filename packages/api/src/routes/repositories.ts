@@ -11,8 +11,9 @@ import { and, eq, lt, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
+import { chatMessages } from '../db/chat.js';
 import { githubDeliveries, linkedRepositories } from '../db/schema.js';
-import { tasks } from '../db/tasks.js';
+import { recordTaskIntegration, tasks } from '../db/tasks.js';
 import { appendEvent, requireClan, requirePersonal, type WorkspaceDb } from '../lib/access.js';
 import { pageResponse, parsePage } from '../lib/pagination.js';
 
@@ -143,7 +144,12 @@ const pullRequestSchema = z.object({
   pull_request: z.object({
     merged: z.boolean().optional().default(false),
     merge_commit_sha: gitShaSchema.nullish(),
-    head: z.object({ sha: gitShaSchema }),
+    head: z.object({
+      sha: gitShaSchema,
+      ref: z.string().optional(),
+      repo: z.object({ full_name: repositorySlugSchema }).nullish(),
+    }),
+    base: z.object({ ref: z.string() }).optional(),
   }),
   repository: z.object({ full_name: repositorySlugSchema }),
 });
@@ -156,37 +162,38 @@ async function confirmMerge(
 ) {
   if (!link.confirmsMerges)
     await tx.update(linkedRepositories).set({ confirmsMerges: true }).where(eq(linkedRepositories.id, link.id));
-  const mergeCommitSha = payload.pull_request.merge_commit_sha;
+  const { head, base, merge_commit_sha: mergeCommitSha } = payload.pull_request;
   if (payload.action !== 'closed' || !payload.pull_request.merged || !mergeCommitSha)
     return { accepted: true, ignored: true };
   const rows = await tx
-    .select()
+    .select({ task: tasks, messageId: chatMessages.id })
     .from(tasks)
+    .leftJoin(chatMessages, and(eq(chatMessages.taskId, tasks.id), eq(chatMessages.clanId, tasks.clanId)))
     .where(
       and(
         eq(tasks.clanId, link.clanId),
         eq(tasks.status, 'claimed'),
         sql`${tasks.repository}->>'slug' = ${link.slug}`,
         sql`${tasks.repository}->>'prNumber' = ${String(payload.number)}`,
-        sql`${tasks.repository}->>'headSha' = ${payload.pull_request.head.sha}`,
+        sql`${tasks.repository}->>'headSha' = ${head.sha}`,
         sql`${tasks.repository}->>'state' <> 'merged'`,
       ),
     )
-    .for('update');
-  for (const row of rows) {
-    await tx
-      .update(tasks)
-      .set({ repository: { ...row.repository!, state: 'merged', mergeCommitSha }, updatedAt: sql`now()` })
-      .where(eq(tasks.id, row.id));
+    .for('update', { of: tasks });
+  let integrated = 0;
+  for (const { task, messageId } of rows) {
+    if (
+      messageId &&
+      (head.ref !== task.repository!.branch ||
+        head.repo?.full_name !== link.slug ||
+        base?.ref !== task.repository!.baseBranch)
+    )
+      continue;
     // Like main-change events, the actor is the integration owner rather than the GitHub user who merged.
-    await appendEvent(tx, {
-      clanId: link.clanId,
-      actorId: link.createdBy,
-      type: 'task.integrated',
-      resourceId: row.id,
-    });
+    await recordTaskIntegration(tx, task, mergeCommitSha, link.createdBy, null, messageId !== null);
+    integrated++;
   }
-  return { accepted: true, integrated: rows.length };
+  return { accepted: true, integrated };
 }
 
 export function createGithubWebhookRoutes(db?: WorkspaceDb, master?: string) {

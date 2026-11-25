@@ -10,7 +10,8 @@ Type `clqn`, and a chat opens in your terminal. You talk to one orchestrator age
 4. **The orchestrator splits up the work.** It turns requests into tasks and picks who should do each one. You never manage tasks yourself.
 5. **You say yes or no.** When the orchestrator wants to start an agent on your machine, you get asked. Type `y` or `n`. It never goes over your limits.
 6. **Watch it happen.** A sidebar shows who's working, task progress, and tokens used over time.
-7. **Your `main` stays current.** When `main` changes on GitHub, your local copy updates by itself, but only if you have no uncommitted changes.
+7. **Review the pull request.** Workers publish code changes from their task branches. The clan leader reviews the PR and approves its commit in chat. clqn merges approved work once checks pass.
+8. **Your `main` stays current.** While chat is open, GitHub notifications trigger a fast-forward of clean local default-branch checkouts.
 
 ## Member limits
 
@@ -32,14 +33,14 @@ Each member sets their own:
 - Limits: new members pick Full access (no limits) or Custom when they join; edit token, agent-count, and model limits in F2. All are enforced before each delegation
 - Live sidebar: each delegation's task, worker, status, and tokens
 - Metrics tab (F5): tokens and active agents over time, tokens by member and by task, and queue wait, over 24h or 7d
-- GitHub webhooks tell connected agents when `main` changes, and clean checkouts sync
+- GitHub repository linking during chat setup. Signed push webhooks and a slow fallback keep clean default-branch checkouts current while chat is open
+- Worker branches and PRs are published to the linked repository. Clan-leader approval and passing GitHub checks gate merges, and the clan can follow the PR from chat
 - The API runs on Google Cloud (Cloud Run + PostgreSQL)
 - Choose your agents: settings (F2) list the agent CLIs on your machine (Claude Code, Codex), each on or off. Each one that's on is a worker the orchestrator can pick
 
 ## What's next
 
-1. **`main` sync in the chat screen.** Link the repo during setup, and keep `main` synced while `clqn` is open.
-2. **Update documentation (README - concise, user focused), website**
+- **Update documentation (README - concise, user focused), website**
 
 ## Later
 

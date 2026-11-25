@@ -93,6 +93,7 @@ interface View {
   hasOlder: boolean;
   approval: number;
   approvalFocused: boolean;
+  hasPullRequests?: boolean;
   reply?: ChatMessage | undefined;
   notice?: string | undefined;
 }
@@ -205,11 +206,15 @@ export function chatFrame(view: View): Frame {
   const activity = right
     ? runs.flatMap((run) => {
         const [glyph, label, tone] = runStatuses[run.status];
+        const repository = run.repository;
+        const detail = repository?.prNumber
+          ? `PR #${repository.prNumber} · ${repository.state === 'merged' ? 'Merged' : name(run.worker)}`
+          : `${name(run.worker)} · ${repository ? 'Publishing' : label}`;
         const amount = run.tokens === null ? `~${number(run.estimatedTokens)}` : number(run.tokens);
         const labelWidth = Math.max(1, right - width(amount) - 1);
         return [
           `${paint(glyph, tone)}${pad(clip(` ${plain(run.title)}`, Math.max(1, labelWidth - 1)), labelWidth - 1)} ${paint(amount, 'muted')}`,
-          paint(clip(`  ${name(run.worker)} · ${label}`, right), 'muted'),
+          paint(clip(`  ${detail}`, right), 'muted'),
         ];
       })
     : [];
@@ -282,6 +287,7 @@ export function chatFrame(view: View): Frame {
     );
   } else lines.push('');
   const actions = [
+    view.hasPullRequests ? 'Ctrl+L Pull requests' : '',
     'Ctrl+S Settings',
     pending ? (view.approvalFocused ? '↑↓ Choose  Y Approve  N Decline  Esc Back' : 'Ctrl+P Approvals') : '',
     question ? 'Ctrl+Q Reply' : '',

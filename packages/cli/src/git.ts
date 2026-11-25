@@ -73,16 +73,16 @@ function ref(value: string): void {
     throw new Error('Use a plain Git branch name, not a revision expression or option');
   }
 }
-async function validateRepository(repository: RepositoryWork, cwd: string): Promise<void> {
+async function validateRepository(repository: RepositoryWork, cwd: string, signal?: AbortSignal): Promise<void> {
   slug(repository.slug);
   if (!shaPattern.test(repository.baseSha))
     throw new Error('Base SHA must be a full lowercase 40-character commit SHA');
   for (const branch of [repository.branch, repository.baseBranch]) {
     ref(branch);
-    await git(cwd, ['check-ref-format', '--branch', branch]);
+    await git(cwd, ['check-ref-format', '--branch', branch], signal);
   }
   if (repository.branch === repository.baseBranch) throw new Error('Task branch must differ from its base branch');
-  await verifyOrigin(cwd, repository.slug);
+  await verifyOrigin(cwd, repository.slug, signal);
 }
 async function verifyOrigin(cwd: string, expected: string, signal?: AbortSignal): Promise<void> {
   for (const args of [
@@ -302,6 +302,7 @@ function checksPassed(pr: PullRequest): boolean {
 export async function inspectPullRequest(input: {
   repository: { slug: string; branch: string; baseBranch?: string };
   prNumber: number;
+  signal?: AbortSignal;
 }) {
   slug(input.repository.slug);
   ref(input.repository.branch);
@@ -309,15 +310,20 @@ export async function inspectPullRequest(input: {
     throw new Error('Pull request number must be a positive integer');
   const pr = parsePr(
     JSON.parse(
-      await command('gh', [
-        'pr',
-        'view',
-        String(input.prNumber),
-        '--repo',
-        `github.com/${slug(input.repository.slug)}`,
-        '--json',
-        prFields,
-      ]),
+      await command(
+        'gh',
+        [
+          'pr',
+          'view',
+          String(input.prNumber),
+          '--repo',
+          `github.com/${slug(input.repository.slug)}`,
+          '--json',
+          prFields,
+        ],
+        undefined,
+        input.signal,
+      ),
     ),
     input.repository,
     input.prNumber,
@@ -342,30 +348,51 @@ export async function commitWork(cwd: string, message: string) {
   if (await git(path, ['status', '--porcelain=v1'])) await git(path, ['commit', '--quiet', '-m', message]);
 }
 
+async function checkedTaskHead(worktreePath: string, repository: RepositoryWork, signal?: AbortSignal) {
+  const cwd = await realpath(worktreePath);
+  await validateRepository(repository, cwd, signal);
+  const { branch, baseSha } = repository;
+  if ((await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], signal)) !== branch)
+    throw new Error('Working tree is not on the task branch');
+  if (await git(cwd, ['status', '--porcelain=v1', '--untracked-files=all'], signal))
+    throw new Error('Commit or remove task worktree changes before publishing');
+  const headSha = await git(cwd, ['rev-parse', 'HEAD'], signal);
+  if (!shaPattern.test(headSha)) throw new Error('Task branch does not resolve to a commit');
+  try {
+    await git(cwd, ['merge-base', '--is-ancestor', baseSha, headSha], signal);
+  } catch {
+    throw new Error('Task branch no longer contains the recorded base commit');
+  }
+  return { cwd, headSha };
+}
+
+export async function taskWorktreeChanges(worktreePath: string, repository: RepositoryWork) {
+  const { cwd, headSha } = await checkedTaskHead(worktreePath, repository);
+  if (headSha === repository.baseSha) return undefined;
+  const [baseTree, headTree] = (
+    await git(cwd, ['rev-parse', `${repository.baseSha}^{tree}`, `${headSha}^{tree}`])
+  ).split('\n');
+  return baseTree !== headTree ? headSha : undefined;
+}
+
 export async function publishWorktree(input: {
   worktreePath: string;
   repository: RepositoryWork;
   title: string;
   body?: string;
+  expectedHeadSha?: string;
+  signal?: AbortSignal;
 }) {
-  const cwd = await realpath(input.worktreePath);
-  await validateRepository(input.repository, cwd);
-  const { branch, baseBranch, baseSha } = input.repository;
-  if ((await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])) !== branch)
-    throw new Error('Working tree is not on the task branch');
-  if (await git(cwd, ['status', '--porcelain=v1', '--untracked-files=all']))
-    throw new Error('Commit or remove task worktree changes before publishing');
-  try {
-    await git(cwd, ['merge-base', '--is-ancestor', baseSha, 'HEAD']);
-  } catch {
-    throw new Error('Task branch no longer contains the recorded base commit');
-  }
-  const headSha = await git(cwd, ['rev-parse', 'HEAD']);
-  if (!shaPattern.test(headSha) || headSha === baseSha) throw new Error('Task branch has no commits beyond its base');
+  const { repository, signal } = input;
+  const { cwd, headSha } = await checkedTaskHead(input.worktreePath, repository, signal);
+  const { branch, baseBranch, baseSha } = repository;
+  if (headSha === baseSha) throw new Error('Task branch has no commits beyond its base');
+  if (input.expectedHeadSha !== undefined && input.expectedHeadSha !== headSha)
+    throw new Error('Task commit changed after the worker finished; inspect the worktree before publishing');
   if (!input.title.trim() || input.title.includes('\0') || input.body?.includes('\0'))
     throw new Error('Provide a nonempty pull request title without NUL');
-  await git(cwd, ['push', 'origin', `HEAD:refs/heads/${branch}`]);
-  const remote = await git(cwd, ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`]);
+  await git(cwd, ['push', 'origin', `${headSha}:refs/heads/${branch}`], signal);
+  const remote = await git(cwd, ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], signal);
   if (remote.split(/\s+/)[0] !== headSha)
     throw new Error('Remote task branch changed; inspect it before publishing the task result');
   const listed: unknown = JSON.parse(
@@ -386,6 +413,7 @@ export async function publishWorktree(input: {
         prFields,
       ],
       cwd,
+      signal,
     ),
   );
   if (!Array.isArray(listed) || listed.length > 1)
@@ -411,6 +439,7 @@ export async function publishWorktree(input: {
         input.body ?? '',
       ],
       cwd,
+      signal,
     );
     const match = createdUrl.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/i);
     if (!match || match[1]!.toLowerCase() !== slug(input.repository.slug))
@@ -421,6 +450,7 @@ export async function publishWorktree(input: {
           'gh',
           ['pr', 'view', match[2]!, '--repo', `github.com/${slug(input.repository.slug)}`, '--json', prFields],
           cwd,
+          signal,
         ),
       ),
       input.repository,
@@ -440,6 +470,10 @@ export async function mergePullRequest(input: {
   method?: (typeof mergeMethods)[number];
   // For repositories without CI. Pending or failing checks still block the merge.
   allowNoChecks?: boolean;
+  waitForChecks?: boolean;
+  defaultBranchOnly?: boolean;
+  beforeMerge?: () => Promise<void>;
+  signal?: AbortSignal;
 }) {
   if (!shaPattern.test(input.headSha)) throw new Error('Head SHA must be a full lowercase 40-character commit SHA');
   const method = input.method ?? 'squash';
@@ -449,20 +483,46 @@ export async function mergePullRequest(input: {
     throw new Error('Pull request head changed; review the new commit before merging');
   if (before.state === 'MERGED') return before;
   if (before.state !== 'OPEN') throw new Error('Pull request is closed without a merge');
-  if (!before.checksPassed && !(input.allowNoChecks && !before.checksReported))
+  if (!before.checksPassed && !(input.allowNoChecks && !before.checksReported)) {
+    if (input.waitForChecks) return before;
     throw new Error(
       'All reported checks must finish successfully before merging; at least one successful check is required unless --allow-no-checks is set and the repository reports none',
     );
-  await command('gh', [
-    'pr',
-    'merge',
-    String(input.prNumber),
-    '--repo',
-    `github.com/${slug(input.repository.slug)}`,
-    `--${method}`,
-    '--match-head-commit',
-    input.headSha,
-  ]);
+  }
+  if (input.defaultBranchOnly) {
+    const base = await command(
+      'gh',
+      [
+        'repo',
+        'view',
+        `github.com/${slug(input.repository.slug)}`,
+        '--json',
+        'defaultBranchRef',
+        '--jq',
+        '.defaultBranchRef.name',
+      ],
+      undefined,
+      input.signal,
+    );
+    if (!base || base !== input.repository.baseBranch)
+      throw new Error('Pull request no longer targets the repository’s default branch');
+  }
+  await input.beforeMerge?.();
+  await command(
+    'gh',
+    [
+      'pr',
+      'merge',
+      String(input.prNumber),
+      '--repo',
+      `github.com/${slug(input.repository.slug)}`,
+      `--${method}`,
+      '--match-head-commit',
+      input.headSha,
+    ],
+    undefined,
+    input.signal,
+  );
   const after = await inspectPullRequest(input);
   if (after.headSha !== input.headSha)
     throw new Error('Pull request head changed during merge; inspect the pull request before reporting integration');

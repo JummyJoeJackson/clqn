@@ -15,8 +15,9 @@ import type { AgentChoices } from './agent-runner.js';
 import type { Runtime } from './agent-session.js';
 import { characters, chatFrame, messageLines, plain, transcriptColumns } from './chat-view.js';
 import { metricsFrame } from './metrics-view.js';
+import { chatMerger, chatPullRequests, pullRequestKey, pullRequestsFrame } from './pull-requests.js';
 
-const ctrlShortcuts: Record<string, string> = { s: 'f2', p: 'f3', q: 'f4', g: 'f5' };
+const ctrlShortcuts: Record<string, string> = { s: 'f2', p: 'f3', q: 'f4', g: 'f5', l: 'f6' };
 const help = (error: unknown) => (error instanceof Error ? error.message : 'Request failed');
 const numeric = (text: string) => {
   if (!text || /^(none|∞)$/i.test(text)) return null;
@@ -61,7 +62,12 @@ function nextChoice(choices: AgentChoices, step: number): AgentChoices {
 }
 
 // Resolves when the user quits, or with 'sign-out' when they choose Sign out in settings.
-export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgents): Promise<'quit' | 'sign-out'> {
+export async function runChat(
+  api: ClqnClient,
+  clanId: string,
+  agents?: ChatAgents,
+  options?: { repositoryStatus?: () => string | undefined },
+): Promise<'quit' | 'sign-out'> {
   const { stdin, stdout } = process;
   const actor = await api.whoami();
   if (actor.agentId) throw new Error('Sign in with a personal credential to open the chat');
@@ -91,8 +97,10 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
   let closed = false;
   let paste: string | undefined;
   let metrics: { window: ChatMetricsWindow; data?: ChatMetrics; at: number } | undefined;
+  let reviews: { selected?: string } | undefined;
   const outbox: SendChat[] = [];
   const controller = new AbortController();
+  const merger = chatMerger(api, clanId, controller.signal);
 
   function rows() {
     return stdout.rows || 24;
@@ -109,6 +117,8 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
   function draw() {
     if (closed) return;
     const session = state?.session ?? info.session;
+    const pullRequests = chatPullRequests(state);
+    const background = [agents?.status(), options?.repositoryStatus?.()].filter(Boolean).join(' · ');
     let frame = chatFrame({
       columns: columns(),
       rows: rows(),
@@ -138,12 +148,13 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
       hasOlder: historyCursor !== null,
       approval,
       approvalFocused,
+      hasPullRequests: pullRequests.length > 0,
       reply,
       notice:
         notice ??
         connection ??
         (failed ? 'Message unsent · Ctrl+R Retry' : outbox.length ? 'Sending…' : undefined) ??
-        agents?.status(),
+        (background || undefined),
     });
     if (metrics)
       frame = metricsFrame({
@@ -153,6 +164,18 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
         clan: session?.clan ?? info.clan,
         window: metrics.window,
         metrics: metrics.data,
+        notice,
+      });
+    if (reviews)
+      frame = pullRequestsFrame({
+        columns: columns(),
+        rows: rows(),
+        color: !('NO_COLOR' in process.env),
+        links: process.env.TERM !== 'dumb',
+        clan: session?.clan ?? info.clan,
+        requests: pullRequests,
+        selected: reviews.selected,
+        status: merger.status(reviews.selected),
         notice,
       });
     // Draw in one write to keep polling from moving the input cursor or scrolling the shell.
@@ -183,6 +206,7 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
     if (!next.approvals.length) approvalFocused = false;
     state = next;
     agents?.update(next);
+    merger.update(chatPullRequests(next));
   }
 
   async function loadMetrics() {
@@ -201,7 +225,11 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
 
   async function refresh() {
     if (metrics && Date.now() - metrics.at > 30_000) void loadMetrics();
-    if (closed || refreshing || !state) return;
+    if (closed || refreshing) return;
+    if (!state) {
+      draw();
+      return;
+    }
     refreshing = true;
     try {
       mergeState(await api.chatState(clanId, controller.signal));
@@ -317,6 +345,22 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
     }
   }
 
+  async function decideMerge(approve: boolean) {
+    const pending = chatPullRequests(state).find((request) => pullRequestKey(request) === reviews?.selected);
+    if (!pending?.canReview || busy || columns() < 28 || rows() < 12) return;
+    busy = true;
+    try {
+      await api.decideChatMerge(clanId, pending.taskId, pending.repository.headSha, approve, controller.signal);
+      notice = approve ? 'Approved · will merge when checks pass' : 'Merge declined';
+    } catch (error) {
+      notice = help(error);
+    } finally {
+      busy = false;
+      void refresh();
+      draw();
+    }
+  }
+
   function edit(text: string) {
     const insert = plain(text).slice(0, Math.max(0, 4000 - draft.length));
     draft = draft.slice(0, caret) + insert + draft.slice(caret);
@@ -371,6 +415,10 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
       metrics = { window: '24h', at: 0 };
       approvalFocused = false;
       void loadMetrics();
+    } else if (key.name === 'f6') {
+      const first = chatPullRequests(state)[0];
+      reviews = first ? { selected: pullRequestKey(first) } : {};
+      approvalFocused = false;
     } else if (['f3', 'tab'].includes(key.name ?? '') && state?.approvals.length) {
       approvalFocused = !approvalFocused;
     } else if (key.name === 'f4' && state?.questions.length) {
@@ -425,6 +473,22 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
     }
   }
 
+  function reviewKey(text: string, key: Key) {
+    if (!reviews) return;
+    if (key.name === 'escape' || key.name === 'f6') {
+      reviews = undefined;
+    } else if (key.name === 'up' || key.name === 'down') {
+      const requests = chatPullRequests(state);
+      if (!requests.length) return;
+      const index = requests.findIndex((request) => pullRequestKey(request) === reviews?.selected);
+      const step = key.name === 'up' ? -1 : 1;
+      const next = index < 0 ? 0 : (index + step + requests.length) % requests.length;
+      reviews.selected = pullRequestKey(requests[next]!);
+    } else if (!key.ctrl && !key.meta && /^[yn]$/i.test(text)) {
+      void decideMerge(text.toLowerCase() === 'y');
+    }
+  }
+
   function keypress(text: string | undefined, key: Key = {}) {
     if (closed) return;
     if (key.name === 'paste-start') {
@@ -433,7 +497,7 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
     }
     if (paste !== undefined) {
       if (key.name === 'paste-end') {
-        if (state && !setup && !metrics && !approvalFocused) edit(paste);
+        if (state && !setup && !metrics && !reviews && !approvalFocused) edit(paste);
         paste = undefined;
         draw();
       } else if (paste.length < 4000) {
@@ -455,7 +519,8 @@ export async function runChat(api: ClqnClient, clanId: string, agents?: ChatAgen
         metrics = { window: metrics.window === '24h' ? '7d' : '24h', at: 0 };
         void loadMetrics();
       }
-    } else if (setup) setupKey(text ?? '', key);
+    } else if (reviews) reviewKey(text ?? '', key);
+    else if (setup) setupKey(text ?? '', key);
     else if (state) composerKey(text ?? '', key);
     draw();
   }

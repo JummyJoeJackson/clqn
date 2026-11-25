@@ -15,7 +15,7 @@ export async function chatMetrics(db: WorkspaceDb, clanId: string, window: ChatM
   const member = and(messageScope(clanId), eq(chatMessages.role, 'member'));
   const wait = sql`extract(epoch from ${chatMessages.decidedAt} - ${chatMessages.createdAt})`;
 
-  // A chat task counts as an active agent from each claim until its next release or completion.
+  // A chat task counts as an active agent until release, completion, or repository handoff.
   const series = db.execute<{ start: Date | string; tokens: string; agents: number; wait: number | null }>(sql`
     with spans as (
       select created_at as began, coalesce(next_at, statement_timestamp()) as ended
@@ -24,7 +24,7 @@ export async function chatMetrics(db: WorkspaceDb, clanId: string, window: ChatM
           lead(e.created_at) over (partition by e.resource_id order by e.sequence) as next_at
         from ${events} e
         where e.clan_id = ${clanId}
-          and e.type in ('task.claimed', 'task.released', 'task.completed')
+          and e.type in ('task.claimed', 'task.released', 'task.completed', 'task.repository_bound')
           and e.resource_id in (
             select m.task_id::text from ${chatMessages} m where m.clan_id = ${clanId} and m.task_id is not null
           )

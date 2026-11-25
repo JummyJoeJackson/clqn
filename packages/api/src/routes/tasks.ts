@@ -4,20 +4,22 @@ import {
   assignTaskSchema,
   createTaskSchema,
   integrationReportSchema,
+  mergeApprovalSchema,
+  repositoryInputSchema,
   repositoryReportSchema,
   setAliasSchema,
   type Task,
   type TaskRepository,
   taskListQuerySchema,
 } from '@clqn/shared';
-import { and, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { isChatTask } from '../db/chat-actions.js';
 import { agents, linkedRepositories, memberships } from '../db/schema.js';
-import { tasks } from '../db/tasks.js';
-import { appendEvent, requireClan, type WorkspaceDb } from '../lib/access.js';
+import { recordTaskIntegration, tasks } from '../db/tasks.js';
+import { appendEvent, requireClan, requirePersonal, type WorkspaceDb } from '../lib/access.js';
 import { resourceFilter, rethrowAliasConflict } from '../lib/aliases.js';
 
 const taskView = (row: typeof tasks.$inferSelect): Task => ({
@@ -29,6 +31,37 @@ const missingTask = () => new ApiError(404, 'NOT_FOUND', 'Task not found');
 const conflict = () => new ApiError(409, 'TASK_CONFLICT', 'Task state or ownership does not allow this action');
 const ownTask = (task: typeof tasks.$inferSelect, actor: Actor) =>
   task.ownerId === actor.id && task.ownerAgentId === (actor.agentId ?? null);
+const pendingRepository = (repository: z.output<typeof repositoryInputSchema>): TaskRepository => ({
+  ...repository,
+  headSha: null,
+  prNumber: null,
+  prUrl: null,
+  mergeCommitSha: null,
+  state: 'pending',
+});
+
+// Webhook delivery locks the link before the task. Use that order for GitHub integration writes as well.
+async function lockTaskRepositoryLink(db: WorkspaceDb, taskFilter: SQL | undefined) {
+  const [link] = await db
+    .select({ slug: linkedRepositories.slug, confirmsMerges: linkedRepositories.confirmsMerges })
+    .from(linkedRepositories)
+    .innerJoin(
+      tasks,
+      and(
+        taskFilter,
+        eq(linkedRepositories.clanId, tasks.clanId),
+        eq(linkedRepositories.slug, sql`${tasks.repository}->>'slug'`),
+      ),
+    )
+    .for('share', { of: linkedRepositories });
+  return link;
+}
+
+async function requireMergeLeader(db: WorkspaceDb, actor: Actor, clanId: string) {
+  requirePersonal(actor);
+  if ((await requireClan(db, actor, clanId, 'share')).role !== 'leader')
+    throw new ApiError(403, 'FORBIDDEN', 'Only the clan leader can decide whether this pull request merges');
+}
 
 async function requireCoordinator(db: WorkspaceDb, actor: Actor, clanId: string) {
   const membership = await requireClan(db, actor, clanId);
@@ -114,16 +147,7 @@ export function createTaskRoutes(db: WorkspaceDb) {
         'INVALID_REQUEST',
         'Provide a valid task description, optional alias and repository details',
       );
-    const repository: TaskRepository | null = parsed.data.repository
-      ? {
-          ...parsed.data.repository,
-          headSha: null,
-          prNumber: null,
-          prUrl: null,
-          mergeCommitSha: null,
-          state: 'pending',
-        }
-      : null;
+    const repository = parsed.data.repository ? pendingRepository(parsed.data.repository) : null;
     try {
       const task = await db.transaction(async (tx) => {
         const [row] = await tx
@@ -248,6 +272,101 @@ export function createTaskRoutes(db: WorkspaceDb) {
     });
     return c.json(task);
   });
+  app.post('/:taskId/chat-repository', async (c) => {
+    const actor = c.get('user');
+    const clanId = c.req.param('clanId')!;
+    const filter = resourceFilter(tasks, clanId, c.req.param('taskId'));
+    const body = repositoryInputSchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) throw new ApiError(400, 'INVALID_REQUEST', 'Provide the repository and pinned task branch');
+    const repository = pendingRepository(body.data);
+    const task = await db.transaction(async (tx) => {
+      await requireClan(tx, actor, clanId, 'share');
+      const [link] = await tx
+        .select({ id: linkedRepositories.id })
+        .from(linkedRepositories)
+        .where(and(eq(linkedRepositories.clanId, clanId), eq(linkedRepositories.slug, repository.slug)))
+        .for('share');
+      const [row] = await tx.select().from(tasks).where(filter).for('update');
+      if (!row) throw missingTask();
+      if (!actor.agentId || row.assignedAgentId !== actor.agentId || !ownTask(row, actor)) throw conflict();
+      if (row.status !== 'claimed' || !(await isChatTask(tx, row.id))) throw conflict();
+      if (repository.branch !== `clqn/task-${row.id}`)
+        throw new ApiError(400, 'INVALID_REQUEST', 'Use the task’s clqn branch');
+      if (!link) throw new ApiError(409, 'REPOSITORY_CONFLICT', 'Link this repository to the clan first');
+      if (row.repository) {
+        const { slug, branch, baseBranch, baseSha } = row.repository;
+        if (
+          slug !== repository.slug ||
+          branch !== repository.branch ||
+          baseBranch !== repository.baseBranch ||
+          baseSha !== repository.baseSha
+        )
+          throw conflict();
+        return taskView(row);
+      }
+      const [updated] = await tx
+        .update(tasks)
+        .set({ repository, updatedAt: sql`now()` })
+        .where(eq(tasks.id, row.id))
+        .returning();
+      await appendEvent(tx, {
+        clanId,
+        actorId: actor.id,
+        agentId: actor.agentId,
+        type: 'task.repository_bound',
+        resourceId: row.id,
+      });
+      return taskView(updated!);
+    });
+    return c.json(task);
+  });
+  app.post('/:taskId/merge-approval', async (c) => {
+    const actor = c.get('user');
+    const clanId = c.req.param('clanId')!;
+    const filter = resourceFilter(tasks, clanId, c.req.param('taskId'));
+    const body = mergeApprovalSchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) throw new ApiError(400, 'INVALID_REQUEST', 'Provide the reviewed head SHA and approval');
+    const task = await db.transaction(async (tx) => {
+      await requireMergeLeader(tx, actor, clanId);
+      const link = await lockTaskRepositoryLink(tx, filter);
+      const [row] = await tx.select().from(tasks).where(filter).for('update');
+      if (!row) throw missingTask();
+      if (
+        row.status !== 'claimed' ||
+        row.repository?.state !== 'open' ||
+        row.repository.prNumber === null ||
+        !(await isChatTask(tx, row.id))
+      )
+        throw conflict();
+      if (link?.slug !== row.repository.slug)
+        throw new ApiError(
+          409,
+          'REPOSITORY_CONFLICT',
+          'Link this repository to the clan before reviewing the pull request',
+        );
+      if (row.repository.headSha !== body.data.headSha)
+        throw new ApiError(409, 'REVISION_CONFLICT', 'Pull request head changed; review the new commit');
+      const decision = row.repository.mergeApproval;
+      if (decision?.headSha === body.data.headSha) {
+        if (decision.approved !== body.data.approved) throw conflict();
+        return taskView(row);
+      }
+      const repository = { ...row.repository, mergeApproval: body.data };
+      const [updated] = await tx
+        .update(tasks)
+        .set({ repository, updatedAt: sql`now()` })
+        .where(eq(tasks.id, row.id))
+        .returning();
+      await appendEvent(tx, {
+        clanId,
+        actorId: actor.id,
+        type: body.data.approved ? 'task.merge_approved' : 'task.merge_declined',
+        resourceId: row.id,
+      });
+      return taskView(updated!);
+    });
+    return c.json(task);
+  });
   app.post('/:taskId/repository', async (c) => {
     const actor = c.get('user');
     const clanId = c.req.param('clanId')!;
@@ -257,13 +376,11 @@ export function createTaskRoutes(db: WorkspaceDb) {
     if (!body.success)
       throw new ApiError(400, 'INVALID_REQUEST', 'Provide expectedHeadSha, headSha and optional PR number and URL');
     const task = await db.transaction(async (tx) => {
+      await requireClan(tx, actor, clanId, 'share');
       const [row] = await tx.select().from(tasks).where(filter).for('update');
       if (!row) throw missingTask();
       if (row.status !== 'claimed' || !ownTask(row, actor) || !row.repository || row.repository.state === 'merged')
         throw conflict();
-      if (row.repository.headSha !== body.data.expectedHeadSha) {
-        throw new ApiError(409, 'REVISION_CONFLICT', 'Repository head changed; read the task before reporting again');
-      }
       // GitHub returns owner/repository casing as created; stored slugs are lowercase.
       const prUrl = body.data.prUrl?.toLowerCase();
       if (body.data.prNumber !== undefined) {
@@ -272,6 +389,11 @@ export function createTaskRoutes(db: WorkspaceDb) {
           throw new ApiError(400, 'INVALID_REQUEST', 'PR URL must match the task repository and PR number');
         if (row.repository.prNumber && row.repository.prNumber !== body.data.prNumber) throw conflict();
       }
+      const sameHead = row.repository.headSha === body.data.headSha;
+      if (sameHead && (body.data.prNumber === undefined || row.repository.prNumber === body.data.prNumber))
+        return taskView(row);
+      if (row.repository.headSha !== body.data.expectedHeadSha)
+        throw new ApiError(409, 'REVISION_CONFLICT', 'Repository head changed; read the task before reporting again');
       const repository: TaskRepository = {
         ...row.repository,
         headSha: body.data.headSha,
@@ -279,6 +401,7 @@ export function createTaskRoutes(db: WorkspaceDb) {
         prUrl: prUrl ?? row.repository.prUrl,
         state: body.data.prNumber !== undefined || row.repository.prNumber !== null ? 'open' : 'pushed',
       };
+      if (!sameHead) delete repository.mergeApproval;
       const [updated] = await tx
         .update(tasks)
         .set({ repository, updatedAt: sql`now()` })
@@ -303,43 +426,32 @@ export function createTaskRoutes(db: WorkspaceDb) {
     const body = integrationReportSchema.safeParse(await c.req.json().catch(() => null));
     if (!body.success) throw new ApiError(400, 'INVALID_REQUEST', 'Provide headSha and mergeCommitSha');
     const task = await db.transaction(async (tx) => {
+      const membership = await requireClan(tx, actor, clanId, 'share');
+      const link = await lockTaskRepositoryLink(tx, filter);
       const [row] = await tx.select().from(tasks).where(filter).for('update');
       if (!row) throw missingTask();
-      if (
-        row.status !== 'claimed' ||
-        !row.repository ||
-        row.repository.prNumber === null ||
-        row.repository.headSha !== body.data.headSha
-      )
+      const chatTask = await isChatTask(tx, row.id);
+      if (chatTask && (actor.agentId || membership.role !== 'leader'))
+        throw new ApiError(403, 'FORBIDDEN', 'A personal clan leader credential is required');
+      if (!row.repository || row.repository.prNumber === null || row.repository.headSha !== body.data.headSha)
         throw conflict();
       if (row.repository.state === 'merged') {
         if (row.repository.mergeCommitSha !== body.data.mergeCommitSha) throw conflict();
+        if (row.status !== 'claimed' && !(chatTask && row.status === 'completed')) throw conflict();
         return taskView(row);
       }
+      if (row.status !== 'claimed') throw conflict();
+      if (chatTask) {
+        if (link?.slug !== row.repository.slug)
+          throw new ApiError(409, 'REPOSITORY_CONFLICT', 'Link this repository to the clan before recording a merge');
+        if (!row.repository.mergeApproval?.approved || row.repository.mergeApproval.headSha !== body.data.headSha)
+          throw new ApiError(409, 'TASK_CONFLICT', 'Approve this pull request head before recording a merge');
+      }
       // Once a linked repository sends pull request events, only its signed webhook marks the task merged.
-      const [link] = await tx
-        .select({ confirmsMerges: linkedRepositories.confirmsMerges })
-        .from(linkedRepositories)
-        .where(and(eq(linkedRepositories.clanId, clanId), eq(linkedRepositories.slug, row.repository.slug)));
       if (link?.confirmsMerges) return taskView(row);
-      const repository: TaskRepository = {
-        ...row.repository,
-        state: 'merged',
-        mergeCommitSha: body.data.mergeCommitSha,
-      };
-      const [updated] = await tx
-        .update(tasks)
-        .set({ repository, updatedAt: sql`now()` })
-        .where(eq(tasks.id, row.id))
-        .returning();
-      await appendEvent(tx, {
-        clanId,
-        actorId: actor.id,
-        agentId: actor.agentId ?? null,
-        type: 'task.integrated',
-        resourceId: row.id,
-      });
-      return taskView(updated!);
+      return taskView(
+        await recordTaskIntegration(tx, row, body.data.mergeCommitSha, actor.id, actor.agentId ?? null, chatTask),
+      );
     });
     return c.json(task);
   });

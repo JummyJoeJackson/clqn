@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { taskRepositorySchema } from './tasks.js';
 
 export const limitSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
 export const modelIdSchema = z
@@ -100,8 +101,15 @@ export const chatRunSchema = chatProposalSchema.extend({
   workerId: z.uuid().optional(),
   status: z.enum(['queued', 'running', 'done', 'released']),
   tokens: tokenCount.nullable(),
+  repository: taskRepositorySchema.nullish(),
 });
 export type ChatRun = z.infer<typeof chatRunSchema>;
+export const chatMergeRequestSchema = z.object({
+  taskId: z.uuid(),
+  title: z.string(),
+  repository: taskRepositorySchema,
+});
+export type ChatMergeRequest = z.infer<typeof chatMergeRequestSchema>;
 export const chatSessionSchema = z.object({ host: z.string(), clan: z.string() });
 export const chatInfoSchema = z.object({
   session: chatSessionSchema.nullable(),
@@ -119,6 +127,7 @@ export const chatStateSchema = chatHistorySchema.extend({
   approvals: z.array(chatProposalSchema),
   questions: z.array(chatMessageSchema),
   runs: z.array(chatRunSchema),
+  mergeQueue: z.array(chatMergeRequestSchema).optional(),
   queued: z.number().int().nonnegative(),
   running: z.number().int().nonnegative(),
   usage: z.object({ tokens: tokenCount, reserved: tokenCount, agents: z.number().int().nonnegative() }),
@@ -158,6 +167,6 @@ export const chatMetricsSchema = z.object({
     z.object({ name: z.string(), tokens: tokenCount, reserved: tokenCount, tokenLimit: tokenCount.nullable() }),
   ),
   // Delegations sent in the window, plus any still active.
-  tasks: z.array(chatRunSchema.omit({ messageId: true, taskId: true, model: true })),
+  tasks: z.array(chatRunSchema.omit({ messageId: true, taskId: true, model: true, repository: true })),
 });
 export type ChatMetrics = z.infer<typeof chatMetricsSchema>;

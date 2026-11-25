@@ -1,9 +1,20 @@
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type Agent, ApiError, type ChatRun, type ChatState, ClqnClient, type WorkerCommands } from '@clqn/shared';
+import {
+  type Agent,
+  ApiError,
+  type ChatRun,
+  type ChatState,
+  type ChatUsage,
+  ClqnClient,
+  chatUsageSchema,
+  gitShaSchema,
+  repositoryInputSchema,
+  type WorkerCommands,
+} from '@clqn/shared';
 import {
   type AgentProfile,
   agentCommand,
@@ -18,8 +29,18 @@ import {
   saveAgentProfile,
   saveAgentsOff,
 } from './agent-session.js';
-import { configDirectory } from './config.js';
-import { commitWork, localRepository, prepareWorktree, repositoryForNewTask, taskWorktreeLocation } from './git.js';
+import { configDirectory, writePrivateJson } from './config.js';
+import {
+  commitWork,
+  localRepository,
+  openTaskWorktree,
+  prepareWorktree,
+  publishWorktree,
+  type RepositoryWork,
+  repositoryForNewTask,
+  taskWorktreeChanges,
+  taskWorktreeLocation,
+} from './git.js';
 
 type Listed = Agent & { active?: boolean | undefined };
 interface Connection {
@@ -158,19 +179,59 @@ async function prepare(options: AgentRunnerOptions) {
   return { workers, orchestrator };
 }
 
-// A worker never edits the checkout clqn was opened in: it gets a new task worktree, or a scratch
-// directory when clqn was not opened in a GitHub clone.
-async function taskWorkspace(project: string, taskId: string) {
-  try {
-    await localRepository(project);
-  } catch {
+interface TaskWorkspace {
+  path: string;
+  source?: { repoPath: string; repository: RepositoryWork };
+}
+
+// A worker edits its own worktree of the clan's linked clone. A clan without a repo can also use scratch work.
+async function taskWorkspace(options: AgentRunnerOptions, taskId: string): Promise<TaskWorkspace> {
+  if (options.workspace) return { path: await options.workspace(taskId) };
+  const { api, clanId, project } = options;
+  const [local, { repositories }] = await Promise.all([
+    localRepository(project).catch(() => undefined),
+    api.repositories(clanId),
+  ]);
+  if (!local) {
+    if (repositories.length) throw new Error("Open clqn in a clone of the clan's linked repository to run this task");
     const directory = join(configDirectory(), 'work', taskId);
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    return directory;
+    return { path: directory };
   }
-  const repository = await repositoryForNewTask(project);
-  const location = await taskWorktreeLocation({ repoPath: project, taskId, repository });
-  return (await prepareWorktree({ ...location, repository })).path;
+  if (!repositories.some(({ slug }) => slug === local.repository))
+    throw new Error(`Ask the clan leader to link ${local.repository} before running tasks from this clone`);
+  const repository = { ...(await repositoryForNewTask(local.root)), branch: `clqn/task-${taskId}` };
+  const location = await taskWorktreeLocation({ repoPath: local.root, taskId, repository });
+  const { path } = await prepareWorktree({ ...location, repository });
+  return { path, source: { repoPath: location.repoPath, repository } };
+}
+
+interface PendingPublication {
+  repoPath: string;
+  repository: RepositoryWork;
+  headSha: string;
+  usage: ChatUsage;
+  linkMessageId: string;
+}
+
+const publicationPath = (taskId: string) => join(configDirectory(), 'publications', `${taskId}.json`);
+
+async function readPublication(taskId: string): Promise<PendingPublication | undefined> {
+  try {
+    const saved: Partial<PendingPublication> = JSON.parse(await readFile(publicationPath(taskId), 'utf8'));
+    if (!saved || typeof saved.repoPath !== 'string' || typeof saved.linkMessageId !== 'string')
+      throw new Error('Saved task publication is invalid');
+    return {
+      repoPath: saved.repoPath,
+      repository: repositoryInputSchema.parse(saved.repository),
+      headSha: gitShaSchema.parse(saved.headSha),
+      usage: chatUsageSchema.parse(saved.usage),
+      linkMessageId: saved.linkMessageId,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return undefined;
+  }
 }
 
 const orchestratorPrompt = `You are the clqn orchestrator. Handle the chat queue with the clqn MCP tools, then stop. Do not edit files or run commands.
@@ -196,6 +257,8 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
   const lifecycles = new Set<Promise<void>>();
   const attempted = new Set<string>();
   const workers = new Map<string, string>();
+  const publicationRetry = new Map<string, number>();
+  const publicationAbort = new AbortController();
   let connections: Awaited<ReturnType<typeof prepare>> | undefined;
   let latest: ChatState | undefined;
   let generation = 0;
@@ -288,6 +351,77 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
     );
   }
 
+  function publish(run: ChatRun, connection: Connection, saved?: PendingPublication) {
+    const { taskId, title } = run;
+    const { clanId } = options;
+    const api = agentClient(options, connection.profile);
+    // No time limit while an attempt is in flight, or once there is nothing left to send.
+    publicationRetry.set(taskId, Infinity);
+    track(
+      (async () => {
+        try {
+          const pending = saved ?? (await readPublication(taskId));
+          if (!pending || stopped) return;
+          const task = await api.task(clanId, taskId);
+          if (task.ownerAgentId !== connection.profile.agentId || !['claimed', 'completed'].includes(task.status))
+            throw new Error('The worker no longer owns this task');
+          const { repository, headSha, repoPath } = pending;
+          const usage = { ...pending.usage, tokens: Math.max(pending.usage.tokens, run.tokens ?? 0) };
+          const reported = await api.reportChatUsage(clanId, taskId, usage).then(
+            () => true,
+            () => false,
+          );
+          if (stopped) return;
+          const bound = task.repository ?? (await api.bindChatTaskRepository(clanId, taskId, repository)).repository;
+          if (
+            !bound ||
+            bound.slug !== repository.slug ||
+            bound.branch !== repository.branch ||
+            bound.baseBranch !== repository.baseBranch ||
+            bound.baseSha !== repository.baseSha ||
+            (bound.headSha !== null && bound.headSha !== headSha)
+          ) {
+            throw new Error('The task repository or commit differs from the saved worktree');
+          }
+          let url = bound.prUrl;
+          if (!url) {
+            const { signal } = publicationAbort;
+            // The repository may have been unlinked since this task finished.
+            const { repositories } = await options.api.repositories(clanId, signal);
+            if (!repositories.some(({ slug }) => slug === repository.slug))
+              throw new Error(`Ask the clan leader to link ${repository.slug} to publish this task`);
+            const location = await taskWorktreeLocation({ repoPath, taskId, repository });
+            const { path } = await openTaskWorktree({
+              ...location,
+              worktreePath: await realpath(location.worktreePath),
+              repository,
+            });
+            const pr = await publishWorktree({
+              worktreePath: path,
+              repository,
+              expectedHeadSha: headSha,
+              title,
+              signal,
+            });
+            const recorded = await api.reportTaskRepository(clanId, taskId, { ...pr, expectedHeadSha: bound.headSha });
+            url = recorded.repository?.prUrl ?? null;
+            if (!url) throw new Error('The pull request has not been recorded yet');
+          }
+          if (!reported) await api.reportChatUsage(clanId, taskId, usage);
+          await api.reportChatUsage(clanId, taskId, {
+            tokens: usage.tokens,
+            result: { id: pending.linkMessageId, text: `Pull request for ${title}\n${url}` },
+          });
+          await rm(publicationPath(taskId), { force: true });
+          if (problem?.startsWith(`${title} · Publishing`)) problem = undefined;
+        } catch (error) {
+          publicationRetry.set(taskId, now() + retryAfter);
+          if (!stopped) problem = `${title} · Publishing will retry · ${message(error)}`;
+        }
+      })(),
+    );
+  }
+
   function work(run: ChatRun, connection: Connection, commands: WorkerCommands) {
     attempted.add(run.taskId);
     workers.set(run.taskId, run.title);
@@ -297,11 +431,12 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
       (async () => {
         let claimed = false;
         let finished = false;
+        let pending: PendingPublication | undefined;
         try {
           await api.transitionTask(clanId, run.taskId, 'claim');
           claimed = true;
           const task = await api.task(clanId, run.taskId);
-          const cwd = await (options.workspace ?? ((id) => taskWorkspace(options.project, id)))(run.taskId);
+          const { path: cwd, source } = await taskWorkspace(options, run.taskId);
           if (stopped) return;
           const { ok, output } = await launch(
             `worker-${run.taskId}`,
@@ -312,28 +447,34 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
             run.model,
             commands,
           );
-          if (ok && !stopped)
-            await commitWork(cwd, run.title).catch((error: unknown) => {
-              problem = `${run.title} · could not commit · ${message(error)}`;
-            });
           const text = output.text?.replaceAll('\0', '').slice(0, 4000).trim();
-          if (output.tokens || text)
-            await api
-              .reportChatUsage(clanId, run.taskId, {
-                tokens: Math.max(output.tokens, run.tokens ?? 0),
-                ...(text ? { result: { id: randomUUID(), text } } : {}),
-              })
-              .catch(() => undefined);
-          finished = ok && !stopped;
+          const usage: ChatUsage = {
+            tokens: Math.max(output.tokens, run.tokens ?? 0),
+            ...(text ? { result: { id: randomUUID(), text } } : {}),
+          };
+          if (ok && !stopped) {
+            await commitWork(cwd, run.title);
+            const headSha = source && (await taskWorktreeChanges(cwd, source.repository));
+            if (source && headSha) {
+              const result = { ...source, headSha, usage, linkMessageId: randomUUID() };
+              // Save before contacting the API, so closing chat or a failed report cannot lose this commit.
+              await writePrivateJson(publicationPath(run.taskId), result);
+              pending = result;
+            }
+            finished = true;
+          }
+          if (!pending && (usage.tokens || usage.result))
+            await api.reportChatUsage(clanId, run.taskId, usage).catch(() => undefined);
           if (!ok && !stopped && !problem?.startsWith('Install'))
             problem = `${run.title} failed · ${output.error ?? `see ${join(configDirectory(), 'logs', `worker-${run.taskId}.log`)}`}`;
         } catch (error) {
           problem = `${run.title} · ${message(error)}`;
         } finally {
-          // A finished task completes; anything else goes back to the orchestrator.
-          if (claimed)
+          // Work with a commit stays claimed through PR review. Releasing it would discard its assignment.
+          if (claimed && !pending)
             await api.transitionTask(clanId, run.taskId, finished ? 'complete' : 'release').catch(() => undefined);
           workers.delete(run.taskId);
+          if (pending && !stopped) publish(run, connection, pending);
         }
       })(),
     );
@@ -367,9 +508,15 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
     if (connections.orchestrator) orchestrate(state, connections.orchestrator);
     const limit = state.settings.agentLimit ?? Number.POSITIVE_INFINITY;
     for (const run of state.runs) {
-      if (workers.size >= limit) break;
       const connection = run.workerId ? connections.workers.get(run.workerId) : undefined;
-      if (run.status === 'queued' && connection && !attempted.has(run.taskId))
+      if (!connection) continue;
+      if (
+        (run.status === 'running' || (run.status === 'done' && run.repository)) &&
+        !workers.has(run.taskId) &&
+        now() >= (publicationRetry.get(run.taskId) ?? -Infinity)
+      )
+        publish(run, connection);
+      if (run.status === 'queued' && workers.size < limit && !attempted.has(run.taskId))
         work(run, connection, state.settings.commands);
     }
   }
@@ -404,6 +551,7 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
     async stop() {
       if (stopped) return;
       stopped = true;
+      publicationAbort.abort();
       killAll();
       process.off('exit', killAll);
       // Give killed workers a moment to hand their tasks back.
