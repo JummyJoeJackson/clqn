@@ -85,8 +85,7 @@ interface View {
   host?: string | undefined;
   userId: string;
   state?: ChatState | undefined;
-  // Queued messages the orchestrator is handling, shown as Processing on animation frame `frame`.
-  processing?: ReadonlySet<string> | undefined;
+  // Animation frame for the message the orchestrator is processing.
   frame?: number | undefined;
   messages: ChatMessage[];
   settings?: SettingsView | undefined;
@@ -118,11 +117,10 @@ export function messageLines(
   columns: number,
   userId: string,
   paint: Paint = (text) => text,
-  // Set while the orchestrator is handling this queued message: it shows as Processing on this animation frame.
-  frame?: number,
+  frame = 0,
 ) {
   const isMember = message.role === 'member';
-  const active = isMember && message.status === 'queued' && frame !== undefined;
+  const active = isMember && message.status === 'queued' && message.processing === true;
   const [icon, status, tone] = active
     ? (['◌', 'Processing', 'muted'] as const)
     : isMember
@@ -134,7 +132,7 @@ export function messageLines(
   const header =
     `${paint(icon, tone)} ${paint(label, isMember ? 'bold' : 'accent')}  ${paint(stamp, 'muted')}` +
     (status && width(label) + status.length + 11 <= columns
-      ? `  ${active ? shimmer(status, frame ?? 0, paint) : paint(status, tone)}`
+      ? `  ${active ? shimmer(status, frame, paint) : paint(status, tone)}`
       : '');
   const body = isMember
     ? wrap(message.text, Math.max(2, columns - 2))
@@ -229,9 +227,7 @@ export function chatFrame(view: View): Frame {
   lines.push(heading(queued, left) + (right ? sep + heading(runLabel, right) : ''));
 
   const transcript = view.messages.length
-    ? view.messages.flatMap((message) =>
-        messageLines(message, left, view.userId, paint, view.processing?.has(message.id) ? view.frame : undefined),
-      )
+    ? view.messages.flatMap((message) => messageLines(message, left, view.userId, paint, view.frame))
     : wrap('Send a task, question, or context to the orchestrator.', left).map((line) => paint(line, 'muted'));
   const runs = state?.runs ?? [];
   const activity = right

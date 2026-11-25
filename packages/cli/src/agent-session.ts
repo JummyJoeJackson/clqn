@@ -109,6 +109,10 @@ export function agentCommand(
     role: 'orchestrator' | 'worker';
     model?: string | null | undefined;
     commands?: WorkerCommands | undefined;
+    // Claude Code only: keep running and read one JSON user message per line from stdin, each a turn.
+    session?: boolean | undefined;
+    // Claude Code only: rules added to the system prompt, so they hold for every turn of a session.
+    instructions?: string | undefined;
   },
 ): AgentCommand {
   const commands = options.role === 'worker' ? (options.commands ?? 'sandboxed') : 'off';
@@ -130,15 +134,18 @@ export function agentCommand(
             : ['--sandbox', commands === 'sandboxed' ? 'workspace-write' : 'read-only']),
           ...model,
           '-c',
-          `mcp_servers.clqn={command=${JSON.stringify(command)},args=${JSON.stringify(args)}}`,
+          // Codex exec cannot ask for approval, so clqn tools that write would otherwise always be refused.
+          `mcp_servers.clqn={command=${JSON.stringify(command)},args=${JSON.stringify(args)},default_tools_approval_mode="approve"}`,
           '-c',
           `shell_environment_policy.set.CLQN_AGENT_PROFILE=${JSON.stringify(profilePath)}`,
           '-',
         ]
       : [
           '--print',
-          '--output-format',
-          'json',
+          ...(options.session
+            ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
+            : ['--output-format', 'json']),
+          ...(options.instructions ? ['--append-system-prompt', options.instructions] : []),
           ...model,
           '--strict-mcp-config',
           '--mcp-config',
@@ -147,7 +154,8 @@ export function agentCommand(
           // skills, as if a member had started them there; the orchestrator only needs clqn tools.
           '--setting-sources',
           'project,local',
-          ...(options.role === 'orchestrator' ? ['--disable-slash-commands'] : []),
+          // The orchestrator gets no built-in tools, so its clqn tools load up front instead of through a search.
+          ...(options.role === 'orchestrator' ? ['--disable-slash-commands', '--tools', ''] : []),
           // Sandboxed workers run commands without prompts inside Claude Code's OS sandbox: writes stay in the
           // worktree (git metadata included, hooks and config excluded) and the network is limited to the npm
           // registry. npm's cache moves out of ~/.npm, which the sandbox blocks, into a directory it may write.

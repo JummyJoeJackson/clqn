@@ -32,6 +32,7 @@ import {
   chatQueue,
   chatUsage,
   messageView,
+  pickNext,
 } from '../db/chat-read.js';
 import { requireClan, requirePersonal, type WorkspaceDb } from '../lib/access.js';
 
@@ -175,17 +176,18 @@ export function createChatRoutes(db: WorkspaceDb) {
     });
     return c.json(messageView(message), 201);
   });
-  app.get('/inbox', async (c) => {
+  // The orchestrator takes one message at a time; taking it marks it as processing for every member.
+  app.post('/inbox', async (c) => {
     const actor = c.get('user');
     const clanId = c.req.param('clanId')!;
     await requireOrchestrator(db, actor, clanId);
     await requireChat(db, clanId);
-    const [history, queued, held] = await Promise.all([
-      chatHistory(db, clanId),
-      chatQueue(db, clanId, 'queued'),
+    const next = await pickNext(db, clanId);
+    const [history, held] = await Promise.all([
+      chatHistory(db, clanId, undefined, 20),
       chatQueue(db, clanId, 'clarification'),
     ]);
-    return c.json({ ...history, queued, held });
+    return c.json({ ...history, next, held });
   });
   app.post('/messages/:id/decision', async (c) => {
     const actor = c.get('user');

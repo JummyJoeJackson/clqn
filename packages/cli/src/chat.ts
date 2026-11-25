@@ -46,8 +46,8 @@ const setupFor = (settings: ChatSettings): Setup => ({
 export interface ChatAgents {
   update(state: ChatState): void;
   status(): string | undefined;
-  // Queued messages the running orchestrator is handling.
-  processing?(): ReadonlySet<string>;
+  // Calls back after each orchestrator turn, when the chat has likely changed.
+  listen?(listener: () => void): void;
   // The agent CLIs installed on this machine and which the member turned off.
   choices(): Promise<AgentChoices>;
   choose(off: Runtime[]): Promise<void>;
@@ -94,6 +94,7 @@ export async function runChat(
   let connection: string | undefined;
   let busy = false;
   let refreshing = false;
+  let again = false;
   let tick = 0;
   let sending = false;
   let failed = false;
@@ -130,7 +131,6 @@ export async function runChat(
       host: session?.host,
       userId: actor.id,
       state,
-      processing: agents?.processing?.(),
       frame: tick,
       messages: messages(),
       settings: setup
@@ -230,12 +230,14 @@ export async function runChat(
 
   async function refresh() {
     if (metrics && Date.now() - metrics.at > 30_000) void loadMetrics();
+    if (refreshing) again = true;
     if (closed || refreshing) return;
     if (!state) {
       draw();
       return;
     }
     refreshing = true;
+    again = false;
     try {
       mergeState(await api.chatState(clanId, controller.signal));
       connection = undefined;
@@ -245,6 +247,8 @@ export async function runChat(
       refreshing = false;
       draw();
     }
+    // A refresh asked for mid-request may need newer state than that request returned.
+    if (again) void refresh();
   }
 
   async function loadChoices() {
@@ -534,10 +538,10 @@ export async function runChat(
   let stop!: () => void;
   return new Promise((resolve) => {
     const timer = setInterval(() => void refresh(), 2500);
-    // Animate messages the orchestrator is handling, then draw once more to settle them.
+    // Animate the message the orchestrator is processing, then draw once more to settle it.
     let animating = false;
     const animation = setInterval(() => {
-      const working = Boolean(agents?.processing?.().size);
+      const working = messages().some(({ processing }) => processing);
       if (working) tick++;
       if ((working || animating) && !setup && !metrics) draw();
       animating = working;
@@ -558,6 +562,8 @@ export async function runChat(
       stdout.write('\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1007l\x1b[?1049l');
       resolve(result);
     };
+    // Show the orchestrator's answer as soon as its turn ends instead of at the next poll.
+    agents?.listen?.(() => void refresh());
     emitKeypressEvents(stdin);
     stdin.setRawMode(true);
     stdin.on('keypress', keypress);

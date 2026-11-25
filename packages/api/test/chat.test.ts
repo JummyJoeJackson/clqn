@@ -63,8 +63,8 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
     (await chat(member.token, '/join', { ...defaultChatSettings, agentLimit: 1, tokenLimit: 100 })).status,
     200,
   );
-  assert.equal((await chat(worker.token, '/inbox')).status, 403);
-  assert.equal((await chat(host.token, '/inbox')).status, 403);
+  assert.equal((await chat(worker.token, '/inbox', {})).status, 403);
+  assert.equal((await chat(host.token, '/inbox', {})).status, 403);
   assert.equal((await state(member.token)).session.host, host.user.email);
 
   const original = await send(host.token, 'Cover macOS and Linux');
@@ -81,13 +81,14 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
     200,
   );
   assert.equal((await approve(member.token, original)).status, 409);
-  const inboxResponse = await chat(coordinator.token, '/inbox');
+  assert.equal((await state(member.token)).messages.find(({ id }) => id === unrelated.id)?.processing, undefined);
+  const inboxResponse = await chat(coordinator.token, '/inbox', {});
   assert.equal(inboxResponse.status, 200);
   const inbox = chatInboxSchema.parse(await inboxResponse.json());
-  assert.deepEqual(
-    inbox.queued.map(({ id }) => id),
-    [unrelated.id],
-  );
+  // The orchestrator takes one message at a time, and every member sees it as processing.
+  assert.equal(inbox.next?.id, unrelated.id);
+  assert.equal(inbox.next?.processing, true);
+  assert.equal((await state(member.token)).messages.find(({ id }) => id === unrelated.id)?.processing, true);
   assert.deepEqual(
     inbox.held.map(({ id }) => id),
     [original.id],
@@ -100,6 +101,7 @@ test('PostgreSQL: shared chat, held work, owner approvals, and competing delegat
   const decisions = await Promise.all([delegate(answer, worker.agent.id, 70), delegate(answer, worker.agent.id, 70)]);
   assert.deepEqual(decisions.map((result) => result.status).sort(), [200, 409]);
   assert.equal((await delegate(unrelated, secondWorker.agent.id, 40)).status, 200);
+  assert.equal((await state(member.token)).messages.find(({ id }) => id === unrelated.id)?.processing, undefined);
   const racing = await Promise.all([approve(member.token, answer), approve(member.token, unrelated)]);
   assert.deepEqual(racing.map((result) => result.status).sort(), [200, 409]);
   let active = await state(member.token);

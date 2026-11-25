@@ -154,34 +154,97 @@ test('the leader’s chat connects an orchestrator and runs it only while messag
     replyTo: null,
   } as const;
   const queued = chatState({ queued: 1, messages: [message] });
+  let turns = 0;
+  runner.listen(() => turns++);
+  const result = '{"type":"result","subtype":"success","is_error":false,"result":""}\n';
+  const asked = (child: FakeChild) => child.input.split('\n').filter((line) => line.includes('next queued message'));
+
+  // Claude Code runs one session that stays open and gets one turn per queued message.
   runner.update(queued);
   await until(() => f.spawned.length === 1);
   const [run] = f.spawned;
   assert.equal(run!.command, 'claude');
   assert.deepEqual(run!.args.slice(-4), ['--permission-mode', 'default', '--allowedTools', 'mcp__clqn']);
-  assert.ok(run!.args.includes('--strict-mcp-config'));
+  for (const flag of ['--strict-mcp-config', '--disable-slash-commands', '--verbose'])
+    assert.ok(run!.args.includes(flag));
+  assert.equal(run!.args[run!.args.indexOf('--input-format') + 1], 'stream-json');
+  assert.equal(run!.args[run!.args.indexOf('--tools') + 1], '');
+  assert.match(run!.args[run!.args.indexOf('--append-system-prompt') + 1]!, /clqn_chat_inbox.*clqn_chat_decide once/);
+  assert.ok(!run!.args.join(' ').includes('Fix the links'), 'chat text stays out of argv');
   assert.equal(run!.env.CLQN_TOKEN, undefined);
   assert.match(run!.env.CLQN_AGENT_PROFILE!, /agents/);
-  await until(() => run!.child.input.includes('clqn_chat_inbox'));
+  await until(() => asked(run!.child).length === 1);
+  assert.deepEqual(JSON.parse(asked(run!.child)[0]!).message, {
+    role: 'user',
+    content: 'Handle the next queued message.',
+  });
   assert.equal(runner.status(), 'Orchestrator working');
-  assert.deepEqual([...runner.processing()], [message.id]);
   runner.update(queued);
-  assert.equal(f.spawned.length, 1);
+  assert.equal(asked(run!.child).length, 1, 'one message at a time');
 
-  run!.child.finish(0, '{"result":"done"}');
-  await until(() => runner.status() === undefined);
-  assert.equal(runner.processing().size, 0);
-  // The queue did not move, so wait before trying again.
-  runner.update(queued);
+  run!.child.stdout.write(result);
+  await until(() => turns === 1);
+  assert.equal(runner.status(), undefined);
+  assert.equal(run!.child.killed, false, 'the session stays open');
+  // The next message goes to the same session.
+  const next = { ...message, id: randomUUID(), sequence: 2 };
+  runner.update(chatState({ queued: 1, messages: [{ ...message, status: 'handled' }, next] }));
+  await until(() => asked(run!.child).length === 2);
   assert.equal(f.spawned.length, 1);
+  run!.child.stdout.write(result);
+  await until(() => turns === 2);
+  // The turn left the queue as it was, so wait before trying again.
+  const stuck = chatState({ queued: 1, messages: [next] });
+  runner.update(stuck);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(asked(run!.child).length, 2);
+
+  // A session that dies mid-turn fails that turn; the next one starts a new session.
   f.advance(60_000);
-  runner.update(queued);
+  runner.update(stuck);
+  await until(() => asked(run!.child).length === 3);
+  run!.child.finish(1);
+  await until(() => turns === 3);
+  assert.match(runner.status()!, /Orchestrator failed · The orchestrator session ended/);
+  f.advance(60_000);
+  runner.update(stuck);
   await until(() => f.spawned.length === 2);
   const log = await readFile(join(f.directory, 'logs', 'orchestrator.log'), 'utf8');
-  assert.match(log, /"result":"done"/);
+  assert.match(log, /"type":"result"/);
 
   await runner.stop();
   assert.equal(f.spawned[1]!.child.killed, true);
+});
+
+test('a Codex orchestrator gets one run per message with the rules in its prompt', async (t) => {
+  const f = await fixture(t);
+  const api = {
+    whoami: async () => ({ id: userId, email: 'lead@example.com' }),
+    listAgents: async () => ({ agents: [] }),
+    members: async () => ({ members: [{ userId, email: 'lead@example.com', role: 'leader' }] }),
+    registerAgent: async (_clan: string, name: string, role: 'worker' | 'orchestrator') => ({
+      agent: { ...agent(randomUUID(), role), name },
+      token: token(role === 'worker' ? 'w' : 'o'),
+    }),
+  } as unknown as ClqnClient;
+  const runner = startAgentRunner({
+    api,
+    server,
+    clanId,
+    project: f.directory,
+    spawn: f.spawn,
+    runtimes: async () => ['codex'],
+    now: f.now,
+  });
+  t.after(() => runner.stop());
+  runner.update(chatState({ queued: 1 }));
+  await until(() => f.spawned.length === 1);
+  const [run] = f.spawned;
+  assert.equal(run!.command, 'codex');
+  await until(() => run!.child.input.includes('Handle the next queued message.'));
+  assert.match(run!.child.input, /^You are the clqn orchestrator/);
+  run!.child.finish(0);
+  await until(() => runner.status() === undefined);
 });
 
 test('approved runs start this member’s worker with its model, report usage, and respect the agent limit', async (t) => {
@@ -577,6 +640,7 @@ test('workers run commands as the member allows: off, sandboxed by default, or u
   assert.equal(worker.args[worker.args.indexOf('--add-dir') + 1], worker.env.npm_config_cache);
   assert.equal(worker.args[worker.args.indexOf('--setting-sources') + 1], 'project,local');
   assert.ok(!worker.args.includes('--disable-slash-commands'), "workers keep the repo's skills");
+  assert.ok(!worker.args.includes('--tools'), 'workers keep the built-in tools');
 
   const orchestrator = agentCommand('claude', '/profile.json', { project: '/work', role: 'orchestrator' });
   assert.ok(!orchestrator.args.includes('--settings'), 'the orchestrator runs no commands');
@@ -595,6 +659,8 @@ test('workers run commands as the member allows: off, sandboxed by default, or u
   const codex = (role: 'orchestrator' | 'worker', commands?: 'off' | 'unrestricted') =>
     agentCommand('codex', '/profile.json', { project: '/work/task', role, commands }).args;
   assert.ok(codex('worker').includes('--ignore-user-config'));
+  // Codex exec cannot ask for approval, so clqn tools are approved up front.
+  assert.match(codex('orchestrator').join(' '), /mcp_servers\.clqn=\{.*default_tools_approval_mode="approve"\}/);
   assert.equal(codex('worker')[codex('worker').indexOf('--sandbox') + 1], 'workspace-write');
   assert.equal(codex('worker', 'off')[codex('worker', 'off').indexOf('--sandbox') + 1], 'read-only');
   assert.equal(codex('orchestrator')[codex('orchestrator').indexOf('--sandbox') + 1], 'read-only');

@@ -84,6 +84,8 @@ export const chatMessageSchema = z.object({
   text: z.string(),
   status: chatMessageStatusSchema,
   replyTo: z.uuid().nullable(),
+  // True while the orchestrator is handling this queued message. Older servers omit it.
+  processing: z.boolean().optional(),
 });
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 export const chatProposalSchema = z.object({
@@ -132,8 +134,9 @@ export const chatStateSchema = chatHistorySchema.extend({
   usage: z.object({ tokens: tokenCount, reserved: tokenCount, agents: z.number().int().nonnegative() }),
 });
 export type ChatState = z.infer<typeof chatStateSchema>;
+// Recent chat plus the one queued message to handle now (null when the queue is empty).
 export const chatInboxSchema = chatHistorySchema.extend({
-  queued: z.array(chatMessageSchema),
+  next: chatMessageSchema.nullable(),
   held: z.array(chatMessageSchema),
 });
 

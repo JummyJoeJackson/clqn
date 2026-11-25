@@ -2,7 +2,7 @@
 
 Run `clqn` from the project clone, sign in with GitHub, and create or join a clan. The clan leader can link the current GitHub repository during setup and starts the shared session. Members join from the same screen. The transcript stays with the clan between terminal sessions.
 
-Type a task, question, or project context and press **Enter**. Messages remain queued until the orchestrator picks them up. The agent pane shows each delegation's task, worker, status, and reported tokens. A tilde marks estimated usage.
+Type a task, question, or project context and press **Enter**. Messages remain queued until the orchestrator picks them up. It handles one at a time, oldest first, and everyone sees the one in hand as Processing. Each answer appears below the message it answers. A Claude Code orchestrator stays open as one session that restarts every 20 messages; a Codex orchestrator starts once per message. The agent pane shows each delegation's task, worker, status, and reported tokens. A tilde marks estimated usage.
 
 The metrics view shows reported tokens and active agents over 24 hours or seven days.
 

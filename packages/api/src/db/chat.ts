@@ -68,6 +68,8 @@ export const chatMessages = pgTable(
     tokens: bigint('tokens', { mode: 'number' }),
     // When the orchestrator first took the message out of the queue; null while queued and for older messages.
     decidedAt: timestamp('decided_at', { withTimezone: true }),
+    // When the orchestrator last took this message from its inbox to handle it next.
+    pickedAt: timestamp('picked_at', { withTimezone: true }),
   },
   (table) => [
     index('chat_messages_history_idx').on(table.clanId, table.sequence),

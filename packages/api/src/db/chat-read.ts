@@ -5,7 +5,7 @@ import {
   type ChatSettings,
   defaultChatSettings,
 } from '@clqn/shared';
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { WorkspaceDb } from '../lib/access.js';
 import { chatMembers, chatMessages, chats } from './chat.js';
 import { agents, clans, linkedRepositories, users } from './schema.js';
@@ -15,9 +15,24 @@ export const messageScope = (clanId: string) => eq(chatMessages.clanId, clanId);
 export const memberScope = (clanId: string, userId: string) =>
   and(eq(chatMembers.clanId, clanId), eq(chatMembers.userId, userId));
 
+// A picked message stops showing as processing after this long, for example when the leader closes the chat mid-turn.
+const processingFor = 5 * 60_000;
+
 export function messageView(row: typeof chatMessages.$inferSelect): ChatMessage {
-  const { id, sequence, authorId, author, role, createdAt, text, status, replyTo } = row;
-  return { id, sequence, authorId, author, role, createdAt: createdAt.toISOString(), text, status, replyTo };
+  const { id, sequence, authorId, author, role, createdAt, text, status, replyTo, pickedAt } = row;
+  const processing = status === 'queued' && pickedAt !== null && Date.now() - pickedAt.getTime() < processingFor;
+  return {
+    id,
+    sequence,
+    authorId,
+    author,
+    role,
+    createdAt: createdAt.toISOString(),
+    text,
+    status,
+    replyTo,
+    ...(processing ? { processing } : {}),
+  };
 }
 
 export async function chatIdentity(db: WorkspaceDb, clanId: string) {
@@ -45,14 +60,14 @@ export async function chatInfo(
   return { clan, session: host === null ? null : { clan, host }, canStart, settings: member?.settings ?? defaults };
 }
 
-export async function chatHistory(db: WorkspaceDb, clanId: string, before?: number) {
+export async function chatHistory(db: WorkspaceDb, clanId: string, before?: number, size = 60) {
   const rows = await db
     .select()
     .from(chatMessages)
     .where(and(messageScope(clanId), before ? lt(chatMessages.sequence, before) : undefined))
     .orderBy(desc(chatMessages.sequence))
-    .limit(61);
-  const page = rows.slice(0, 60);
+    .limit(size + 1);
+  const page = rows.slice(0, size);
   return {
     before: rows.length > page.length ? page.at(-1)!.sequence : null,
     messages: page.reverse().map(messageView),
@@ -68,6 +83,31 @@ export async function chatQueue(db: WorkspaceDb, clanId: string, status: 'queued
       .orderBy(asc(chatMessages.sequence))
       .limit(60)
   ).map(messageView);
+}
+
+// Hands the orchestrator the oldest queued message, so it handles one at a time and members see which.
+export async function pickNext(db: WorkspaceDb, clanId: string) {
+  return db.transaction(async (tx) => {
+    const [next] = await tx
+      .select({ id: chatMessages.id })
+      .from(chatMessages)
+      .where(and(messageScope(clanId), eq(chatMessages.status, 'queued')))
+      .orderBy(asc(chatMessages.sequence))
+      .limit(1);
+    await tx
+      .update(chatMessages)
+      .set({ pickedAt: null })
+      .where(
+        and(messageScope(clanId), isNotNull(chatMessages.pickedAt), next ? ne(chatMessages.id, next.id) : undefined),
+      );
+    if (!next) return null;
+    const [picked] = await tx
+      .update(chatMessages)
+      .set({ pickedAt: sql`clock_timestamp()` })
+      .where(eq(chatMessages.id, next.id))
+      .returning();
+    return messageView(picked!);
+  });
 }
 
 export const activeRun = and(

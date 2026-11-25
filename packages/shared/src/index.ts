@@ -247,8 +247,9 @@ export class ClqnClient {
   sendChat(clanId: string, message: SendChat, signal?: AbortSignal) {
     return this.request(`${this.chatPath(clanId)}/messages`, chatMessageSchema, sendChatSchema.parse(message), signal);
   }
+  // Takes the next queued message for the orchestrator to handle.
   chatInbox(clanId: string) {
-    return this.request(`${this.chatPath(clanId)}/inbox`, chatInboxSchema);
+    return this.request(`${this.chatPath(clanId)}/inbox`, chatInboxSchema, {});
   }
   decideChat(clanId: string, id: string, decision: ChatDecision) {
     return this.request(
