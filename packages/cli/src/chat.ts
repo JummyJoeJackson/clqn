@@ -13,7 +13,7 @@ import {
 } from '@clqn/shared';
 import type { AgentChoices } from './agent-runner.js';
 import type { Runtime } from './agent-session.js';
-import { characters, chatFrame, messageLines, plain, transcriptColumns } from './chat-view.js';
+import { characters, chatFrame, messageLines, plain, threaded, transcriptColumns } from './chat-view.js';
 import { metricsFrame } from './metrics-view.js';
 import { chatMerger, chatPullRequests, pullRequestKey, pullRequestsFrame } from './pull-requests.js';
 
@@ -115,7 +115,7 @@ export async function runChat(
   }
 
   function messages() {
-    return [...older, ...recent];
+    return threaded([...older, ...recent]);
   }
 
   function draw() {
@@ -538,10 +538,10 @@ export async function runChat(
   let stop!: () => void;
   return new Promise((resolve) => {
     const timer = setInterval(() => void refresh(), 2500);
-    // Animate the message the orchestrator is processing, then draw once more to settle it.
+    // Animate messages waiting for the orchestrator, then draw once more to settle them.
     let animating = false;
     const animation = setInterval(() => {
-      const working = messages().some(({ processing }) => processing);
+      const working = messages().some(({ role, status }) => role === 'member' && status === 'queued');
       if (working) tick++;
       if ((working || animating) && !setup && !metrics) draw();
       animating = working;

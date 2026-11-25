@@ -112,6 +112,26 @@ export function shimmer(text: string, frame: number, paint: Paint) {
     .join('');
 }
 
+// Puts each orchestrator or worker answer right below the message it answers, after earlier answers to it.
+// Answers to messages outside the loaded history stay where they were sent.
+export function threaded(messages: ChatMessage[]) {
+  const ids = new Set(messages.map(({ id }) => id));
+  const answers = new Map<string, ChatMessage[]>();
+  const top: ChatMessage[] = [];
+  for (const message of messages) {
+    const parent = message.role !== 'member' && message.replyTo && ids.has(message.replyTo) ? message.replyTo : '';
+    if (parent) answers.set(parent, [...(answers.get(parent) ?? []), message]);
+    else top.push(message);
+  }
+  const ordered: ChatMessage[] = [];
+  const add = (message: ChatMessage) => {
+    ordered.push(message);
+    for (const answer of answers.get(message.id) ?? []) add(answer);
+  };
+  for (const message of top) add(message);
+  return ordered;
+}
+
 export function messageLines(
   message: ChatMessage,
   columns: number,
@@ -120,8 +140,9 @@ export function messageLines(
   frame = 0,
 ) {
   const isMember = message.role === 'member';
-  const active = isMember && message.status === 'queued' && message.processing === true;
-  const [icon, status, tone] = active
+  // Messages waiting for the orchestrator shimmer, whether queued or being processed.
+  const active = isMember && message.status === 'queued';
+  const [icon, status, tone] = message.processing
     ? (['◌', 'Processing', 'muted'] as const)
     : isMember
       ? statuses[message.status]
