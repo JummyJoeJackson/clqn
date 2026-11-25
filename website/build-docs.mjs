@@ -3,11 +3,12 @@ import { Marked } from 'marked';
 
 const guides = [
   ['index', 'Getting started'],
+  ['chat', 'Shared clan chat'],
   ['commands', 'Command reference'],
   ['authentication', 'Authentication and clans'],
   ['repositories', 'Repository workflow'],
   ['webhooks', 'GitHub webhooks'],
-  ['policies', 'Agent policies'],
+  ['policies', 'Agent limits'],
 ];
 // Operator guides (hosting, database) stay in the repository, not on the user site.
 const published = new Set(guides.map(([slug]) => slug));

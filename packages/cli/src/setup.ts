@@ -28,7 +28,7 @@ async function saveToken(server: string, token: string) {
 }
 
 export async function signIn(server: string, expectedUserId?: string) {
-  const { token, user } = await githubLogin(server, false);
+  const { token, user } = await githubLogin(server);
   if (expectedUserId !== undefined && user.id !== expectedUserId) {
     await new ClqnClient(server, token).logout().catch(() => undefined);
     throw new Error('Sign in with the GitHub account that received the invitation.');

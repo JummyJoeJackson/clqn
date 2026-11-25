@@ -250,7 +250,6 @@ def main():
     write_svg("header.svg", size, 3, header, DESCRIPTION)
 
     write_website()
-    scale(mark, 6).save(ASSETS / "logo.png")
     frames = []
     for _, heights in SEQUENCE:
         frame = Image.new("RGBA", size, PAPER)

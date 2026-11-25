@@ -4,19 +4,18 @@ The CLI and agent connection run locally. A clqn server stores the shared worksp
 
 ## Self-host with Docker Compose
 
-From a clone of this repository, one command builds the API, starts PostgreSQL, applies migrations, and serves the API on `127.0.0.1:8080`:
+Set `POSTGRES_PASSWORD` before the first start in a private `.env` file beside `docker-compose.yml`. Configure `GITHUB_CLIENT_ID` for [GitHub sign-in](#github-oauth-app) and `GITHUB_WEBHOOK_SECRET` for [repository webhooks](#webhook-server-setup).
+
+From the clone, start the API and PostgreSQL and connect the CLI.
 
 ```sh
 docker compose --profile server up --build -d --wait
-docker compose exec -T api node packages/api/dist/manage-user.js create you@example.com \
-  | clqn login --server http://127.0.0.1:8080
+clqn --api-url http://127.0.0.1:8080
 ```
 
-The second command creates a local account and pipes its credential directly to the CLI. Rerun the first command after pulling updates; it rebuilds the image and applies new migrations.
+Rerun the Compose command after pulling updates to rebuild the API and apply migrations. To try the API without configuring GitHub, use a [provisioned personal token](#provision-user-credentials). Back up the `pgdata` volume.
 
-Set `POSTGRES_PASSWORD`, `GITHUB_CLIENT_ID` ([GitHub login](#github-oauth-app)), and `GITHUB_WEBHOOK_SECRET` ([webhooks](#webhook-server-setup)) in a private `.env` file next to `docker-compose.yml` to configure them. Set `POSTGRES_PASSWORD` before the first start; the database keeps its original password afterward.
-
-Authenticated clients require HTTPS except on loopback. To share the API with teammates, put a TLS reverse proxy in front of port 8080, for example `caddy reverse-proxy --from clqn.example.com --to 127.0.0.1:8080`, and give them the HTTPS URL for `clqn login --server <url>`. Back up the `pgdata` volume.
+Authenticated clients require HTTPS except on loopback. To share the API, put a TLS reverse proxy in front of port 8080, such as `caddy reverse-proxy --from clqn.example.com --to 127.0.0.1:8080`. Teammates connect with `clqn --api-url https://clqn.example.com`.
 
 ## Provision user credentials
 
@@ -28,7 +27,9 @@ npm run user -- create alice@example.com
 npm run user -- revoke <credential-id>
 ```
 
-Creation prints `user`, `credentialId`, and a one-time `token`. Deliver the token privately and keep the credential ID for revocation. Repeating creation issues another credential without revoking earlier ones. Operator-supplied email addresses are identity labels, not verified addresses.
+For Docker, provision the user with `docker compose exec -T api node packages/api/dist/manage-user.js create alice@example.com`.
+
+Creation prints `user`, `credentialId`, and a one-time `token`. Deliver the token privately and keep the credential ID for revocation. Set `CLQN_TOKEN` and `CLQN_API_URL` in the terminal environment before running `clqn`. Repeated creation issues another credential, and previous credentials stay valid until revoked. Operator-provisioned accounts can create a clan for local testing. Joining by email requires a verified GitHub login.
 
 Tokens do not expire automatically. Revocation blocks subsequent requests; a request already authenticated may finish. Database access stays server-side.
 
@@ -132,7 +133,7 @@ Each instance allows 300 `/v1` requests per minute per credential and answers `4
 
 Storage is capped per account and clan: each user can create 25 clans and register 25 agents per clan, a clan holds up to 500 context entries, and each entry keeps its latest 100 revisions. Writes past a cap return `409 LIMIT_REACHED`. Change the caps in `packages/api/src/lib/limits.ts`.
 
-Give teammates the HTTPS service URL for `clqn login --server <url>`. Keep `DATABASE_URL` server-side.
+Give teammates the HTTPS service URL for `clqn --api-url <url>`. Keep `DATABASE_URL` server-side.
 
 ## GitHub webhook secret
 
@@ -148,7 +149,7 @@ Allow public `/hooks/github/*` requests through to the API; GitHub signatures au
 
 ## Verify a deployment
 
-`GET /health` checks process liveness only; `GET /ready` returns `503` until the database answers, so use it for load balancer or startup probes. Every response carries an `X-Request-Id` header, and a `500` message repeats it; the API writes one JSON line per failure with that ID, the method, and the route pattern, never request bodies or credentials. Test authenticated `whoami`, membership, context, and tasks. Run the [two-person acceptance check](#manual-acceptance-check) to verify cloud networking, webhooks, and real agent settings.
+`GET /health` checks process liveness only; `GET /ready` returns `503` until the database answers, so use it for load balancer or startup probes. Every response carries an `X-Request-Id` header, and a `500` message repeats it; the API writes one JSON line per failure with that ID, the method, and the route pattern, never request bodies or credentials. Test `clqn whoami`, clan membership, and a chat delegation. Run the [two-person acceptance check](#manual-acceptance-check) to verify cloud networking, webhooks, and real agent settings.
 
 ## Enable GitHub login
 
@@ -166,11 +167,9 @@ No client secret is needed. Keep database and webhook settings intact. Unset `GI
 
 Before relying on a deployment, test on separate machines with real Codex and Claude Code applications:
 
-1. Sign in as two people; create a clan, invite, and join.
-2. Register an agent on each machine and launch a connected session with `clqn agent run`.
-3. Share context, update it, inspect history, and confirm stale revisions fail.
-4. Assign, claim, submit, merge, and complete a code task. Confirm other actors cannot claim assigned work or complete it; test owner and leader release.
-5. Check `status`, `log`, live webhook delivery, clean-main sync, and missed-delivery fallback.
-6. Confirm agent access to another clan and personal-only operations fails. Revoke a test token and confirm its next request fails.
+1. Run `clqn` as the leader, create a clan, invite a teammate, and start the chat. Run `clqn` as the teammate and join with the invited GitHub account.
+2. Confirm that installed agents appear in settings. Send a request in chat, approve the delegation, and confirm the worker's result appears in the transcript.
+3. Link the repository and verify live webhook delivery, clean default-branch sync, and the fallback after a missed delivery.
+4. Confirm that agent access to another clan and personal-only operations fails. Revoke a test token and confirm its next request fails.
 
 Record application versions and setup issues. Automated MCP tests simulate clients; they do not validate real application settings or cloud networking.

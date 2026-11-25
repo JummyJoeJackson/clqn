@@ -3,7 +3,7 @@ import { ApiError, ClqnClient } from '@clqn/shared';
 import { hostedServer } from './config.js';
 import { terminalText } from './terminal.js';
 
-export async function githubLogin(server: string, json: boolean) {
+export async function githubLogin(server: string) {
   const api = new ClqnClient(server);
   const attempt = await api.startGithubLogin().catch((error: unknown) => {
     if (error instanceof TypeError || (error as Error).name === 'TimeoutError') {
@@ -21,7 +21,7 @@ export async function githubLogin(server: string, json: boolean) {
   console.error(
     terminalText(
       `Open GitHub to authorize clqn:\n${attempt.verificationUri}\n\nEnter this one-time GitHub code: ${attempt.userCode}`,
-      process.stderr.isTTY && !json,
+      process.stderr.isTTY,
     ),
   );
   const deadline = Date.now() + attempt.expiresIn * 1000;
