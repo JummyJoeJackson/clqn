@@ -46,6 +46,8 @@ const setupFor = (settings: ChatSettings): Setup => ({
 export interface ChatAgents {
   update(state: ChatState): void;
   status(): string | undefined;
+  // True while the orchestrator is handling the chat queue.
+  working?(): boolean;
   // The agent CLIs installed on this machine and which the member turned off.
   choices(): Promise<AgentChoices>;
   choose(off: Runtime[]): Promise<void>;
@@ -92,6 +94,7 @@ export async function runChat(
   let connection: string | undefined;
   let busy = false;
   let refreshing = false;
+  let tick = 0;
   let sending = false;
   let failed = false;
   let closed = false;
@@ -127,6 +130,7 @@ export async function runChat(
       host: session?.host,
       userId: actor.id,
       state,
+      shimmer: agents?.working?.() ? tick : undefined,
       messages: messages(),
       settings: setup
         ? {
@@ -529,11 +533,20 @@ export async function runChat(
   let stop!: () => void;
   return new Promise((resolve) => {
     const timer = setInterval(() => void refresh(), 2500);
+    // Animate queued messages while the orchestrator works, then draw once more to settle them.
+    let animating = false;
+    const animation = setInterval(() => {
+      const working = Boolean(agents?.working?.());
+      if (working) tick++;
+      if ((working || animating) && !setup && !metrics) draw();
+      animating = working;
+    }, 120);
     stop = () => {
       if (closed) return;
       closed = true;
       controller.abort();
       clearInterval(timer);
+      clearInterval(animation);
       stdin.off('keypress', keypress);
       stdin.off('end', stop);
       stdout.off('resize', draw);

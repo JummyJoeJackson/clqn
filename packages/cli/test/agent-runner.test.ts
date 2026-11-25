@@ -153,11 +153,13 @@ test('the leader’s chat connects an orchestrator and runs it only while messag
   assert.match(run!.env.CLQN_AGENT_PROFILE!, /agents/);
   await until(() => run!.child.input.includes('clqn_chat_inbox'));
   assert.equal(runner.status(), 'Orchestrator working');
+  assert.equal(runner.working(), true);
   runner.update(queued);
   assert.equal(f.spawned.length, 1);
 
   run!.child.finish(0, '{"result":"done"}');
   await until(() => runner.status() === undefined);
+  assert.equal(runner.working(), false);
   // The queue did not move, so wait before trying again.
   runner.update(queued);
   assert.equal(f.spawned.length, 1);

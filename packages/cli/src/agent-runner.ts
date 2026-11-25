@@ -69,6 +69,8 @@ export interface AgentChoices {
 export interface AgentRunner {
   update(state: ChatState): void;
   status(): string | undefined;
+  // True while the orchestrator is handling the chat queue.
+  working(): boolean;
   // The agent CLIs on this machine and which are turned off. Changing them reconnects this member's workers.
   choices(): Promise<AgentChoices>;
   choose(off: Runtime[]): Promise<void>;
@@ -523,6 +525,7 @@ export function startAgentRunner(options: AgentRunnerOptions): AgentRunner {
 
   return {
     update,
+    working: () => orchestrating,
     status() {
       const count = workers.size;
       return (

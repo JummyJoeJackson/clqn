@@ -85,6 +85,8 @@ interface View {
   host?: string | undefined;
   userId: string;
   state?: ChatState | undefined;
+  // Animation frame for queued messages while the orchestrator works.
+  shimmer?: number | undefined;
   messages: ChatMessage[];
   settings?: SettingsView | undefined;
   draft: string;
@@ -98,7 +100,25 @@ interface View {
   notice?: string | undefined;
 }
 
-export function messageLines(message: ChatMessage, columns: number, userId: string, paint: Paint = (text) => text) {
+// A bright band sweeps across muted text, like Claude Code's working status.
+export function shimmer(text: string, frame: number, paint: Paint) {
+  const chars = characters(text);
+  const at = (frame % (chars.length + 6)) - 3;
+  return chars
+    .map((char, i) => {
+      const distance = Math.abs(i - at);
+      return paint(char, distance === 0 ? [97] : distance === 1 ? [37] : 'muted');
+    })
+    .join('');
+}
+
+export function messageLines(
+  message: ChatMessage,
+  columns: number,
+  userId: string,
+  paint: Paint = (text) => text,
+  frame?: number,
+) {
   const isMember = message.role === 'member';
   const [icon, status, tone] = isMember ? statuses[message.status] : (['›', '', 'accent'] as const);
   const author = isMember && message.authorId === userId ? 'You' : name(message.author);
@@ -106,7 +126,9 @@ export function messageLines(message: ChatMessage, columns: number, userId: stri
   const label = clip(author, Math.max(1, columns - status.length - 13));
   const header =
     `${paint(icon, tone)} ${paint(label, isMember ? 'bold' : 'accent')}  ${paint(stamp, 'muted')}` +
-    (status && width(label) + status.length + 11 <= columns ? `  ${paint(status, tone)}` : '');
+    (status && width(label) + status.length + 11 <= columns
+      ? `  ${frame !== undefined && message.status === 'queued' ? shimmer(status, frame, paint) : paint(status, tone)}`
+      : '');
   const body = isMember
     ? wrap(message.text, Math.max(2, columns - 2))
     : markdownLines(message.text, Math.max(2, columns - 2), paint);
@@ -200,7 +222,7 @@ export function chatFrame(view: View): Frame {
   lines.push(heading(queued, left) + (right ? sep + heading(runLabel, right) : ''));
 
   const transcript = view.messages.length
-    ? view.messages.flatMap((message) => messageLines(message, left, view.userId, paint))
+    ? view.messages.flatMap((message) => messageLines(message, left, view.userId, paint, view.shimmer))
     : wrap('Send a task, question, or context to the orchestrator.', left).map((line) => paint(line, 'muted'));
   const runs = state?.runs ?? [];
   const activity = right
